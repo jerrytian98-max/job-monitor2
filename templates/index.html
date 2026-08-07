@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>招聘监测系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container-custom {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px 15px 0 0 !important;
+            padding: 20px;
+        }
+        .card-header h5 {
+            margin: 0;
+            font-weight: 600;
+        }
+        .status-running {
+            background-color: #d4edda !important;
+        }
+        .status-stopped {
+            background-color: #f8d7da !important;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 10px 30px;
+            border-radius: 25px;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+        }
+        .form-control, .form-select {
+            border-radius: 10px;
+            border: 2px solid #e0e0e0;
+            padding: 12px;
+        }
+        .form-control:focus, .form-select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+        .form-label {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .tag-input {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            min-height: 50px;
+        }
+        .tag {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+        .tag .close-btn {
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 18px;
+            line-height: 1;
+        }
+        .tag-input input {
+            flex: 1;
+            border: none;
+            outline: none;
+            min-width: 100px;
+        }
+        .monitor-status {
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .monitor-status.running {
+            background-color: #d4edda;
+            border: 2px solid #c3e6cb;
+        }
+        .monitor-status.stopped {
+            background-color: #f8d7da;
+            border: 2px solid #f5c6cb;
+        }
+        .monitor-status .status-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        .monitor-status.running .status-icon {
+            color: #28a745;
+        }
+        .monitor-status.stopped .status-icon {
+            color: #dc3545;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .stat-card .number {
+            font-size: 36px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-card .label {
+            color: #666;
+            margin-top: 5px;
+        }
+        .site-url {
+            background: #f8f9fa;
+            padding: 10px 12px;
+            border-radius: 8px;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .site-url .site-url-input {
+            width: 100%;
+            min-width: 0;
+            padding: 5px 7px;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            background: transparent;
+            font-size: 14px;
+            color: #333;
+            transition: border-color 0.15s ease, background 0.15s ease;
+        }
+        .site-url .site-url-input:hover {
+            border-color: #dde1ea;
+            background: #fff;
+        }
+        .site-url .site-url-input:focus {
+            border-color: #8f9cf0;
+            background: #fff;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
+            outline: none;
+        }
+        .site-mode-select {
+            width: 116px;
+            padding: 5px 26px 5px 8px;
+            border: 1px solid #dde1ea;
+            border-radius: 7px;
+            background-color: #fff;
+            color: #4b5563;
+            font-size: 13px;
+        }
+        .site-mode-select:focus {
+            border-color: #8f9cf0;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
+            outline: none;
+        }
+        .site-label-input {
+            --site-label-bg: #e9ecef;
+            --site-label-text: #495057;
+            --site-label-border: #ced4da;
+            min-width: 72px;
+            max-width: 180px;
+            height: 34px;
+            padding: 5px 12px;
+            border: 1px solid var(--site-label-border);
+            border-radius: 10px;
+            background: var(--site-label-bg);
+            color: var(--site-label-text);
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1.2;
+            text-align: center;
+            transition: box-shadow 0.15s ease, filter 0.15s ease;
+        }
+        .site-label-input:hover {
+            filter: brightness(0.98);
+        }
+        .site-label-input:focus {
+            border-color: var(--site-label-text);
+            background: var(--site-label-bg);
+            color: var(--site-label-text);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--site-label-text) 18%, transparent);
+            outline: none;
+        }
+        .site-actions {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .site-url .duplicate-btn,
+        .site-url .delete-btn {
+            padding: 0;
+            text-decoration: none;
+            line-height: 1;
+            font-size: 19px;
+        }
+        .site-url .duplicate-btn {
+            color: #28a745;
+        }
+        .site-url .duplicate-btn:hover {
+            color: #198754;
+        }
+        .site-url .delete-btn {
+            color: #dc3545;
+        }
+        @media (max-width: 576px) {
+            .site-label-input {
+                max-width: 130px;
+            }
+            .site-url {
+                gap: 7px;
+                grid-template-columns: auto minmax(0, 1fr) auto;
+            }
+            .site-mode-select {
+                grid-column: 2 / 3;
+                width: 100%;
+            }
+        }
+        .alert {
+            border-radius: 10px;
+            border: none;
+        }
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+            margin-left: 5px;
+        }
+        .job-item {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            overflow: hidden;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        .job-item:hover {
+            border-color: #c8cff8;
+            box-shadow: 0 3px 12px rgba(102, 126, 234, 0.12);
+        }
+        .job-item.expanded {
+            border-color: #aeb9f4;
+            box-shadow: 0 5px 18px rgba(102, 126, 234, 0.14);
+        }
+        .job-summary {
+            width: 100%;
+            min-height: 52px;
+            padding: 10px 14px;
+            border: 0;
+            background: transparent;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 14px;
+            color: inherit;
+            cursor: pointer;
+            text-align: left;
+        }
+        .job-summary-left {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .job-site-label {
+            --site-label-bg: #e9ecef;
+            --site-label-text: #495057;
+            --site-label-border: #ced4da;
+            min-width: 58px;
+            max-width: 130px;
+            padding: 5px 10px;
+            border: 1px solid var(--site-label-border);
+            border-radius: 9px;
+            background: var(--site-label-bg);
+            color: var(--site-label-text);
+            display: inline-block;
+            flex: 0 0 auto;
+            overflow: hidden;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.2;
+            text-align: center;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .job-item .job-title {
+            min-width: 0;
+            margin: 0;
+            color: #2f3441;
+            font-size: 15px;
+            font-weight: 650;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .job-date {
+            color: #737b8c;
+            font-size: 13px;
+            line-height: 1;
+            white-space: nowrap;
+        }
+        .job-details {
+            padding: 14px 16px 16px;
+            border-top: 1px solid #eceef5;
+            background: #fbfbfd;
+        }
+        .job-details[hidden] {
+            display: none;
+        }
+        .job-detail-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px 18px;
+            margin-bottom: 14px;
+        }
+        .job-detail-field {
+            min-width: 0;
+        }
+        .job-detail-field-label {
+            display: block;
+            margin-bottom: 3px;
+            color: #8a91a0;
+            font-size: 12px;
+        }
+        .job-detail-field-value {
+            color: #343a40;
+            font-size: 14px;
+            overflow-wrap: anywhere;
+        }
+        .job-item .job-company {
+            color: #666;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .job-item .job-meta {
+            color: #999;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .job-item .job-salary {
+            color: #28a745;
+            font-weight: bold;
+            font-size: 16px;
+            white-space: nowrap;
+            flex-shrink: 0;
+            margin-left: 1rem;
+        }
+        .job-item .job-description {
+            color: #555;
+            font-size: 14px;
+            margin-bottom: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+        .job-item .job-url {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .job-item .job-url:hover {
+            text-decoration: underline;
+        }
+        .job-item .badge-new {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        @media (max-width: 768px) {
+            .job-summary {
+                gap: 8px;
+                padding: 9px 10px;
+            }
+            .job-summary-left {
+                gap: 7px;
+            }
+            .job-site-label {
+                min-width: 52px;
+                max-width: 88px;
+                padding-inline: 7px;
+            }
+            .job-date {
+                font-size: 12px;
+            }
+            .job-detail-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        @media (max-width: 480px) {
+            .job-detail-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .modal-header .btn-close {
+            filter: brightness(0) invert(1);
+        }
+        .job-detail-section {
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .job-detail-section:last-child {
+            border-bottom: none;
+        }
+        .job-detail-label {
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 8px;
+        }
+        .pagination .page-link {
+            border-radius: 10px;
+            margin: 0 5px;
+            border: none;
+            color: #667eea;
+        }
+        #paginationNav .pagination {
+            flex-wrap: wrap;
+            row-gap: 8px;
+        }
+        .pagination .page-item.active .page-link {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .search-box {
+            border-radius: 25px;
+            border: 2px solid #e0e0e0;
+            padding: 10px 20px;
+        }
+        .search-box:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+        #workLog .log-info {
+            color: #4ecdc4;
+        }
+        #workLog .log-success {
+            color: #a8e6cf;
+        }
+        #workLog .log-warning {
+            color: #ffd93d;
+        }
+        #workLog .log-error {
+            color: #ff6b6b;
+        }
+        #workLog .log-time {
+            color: #888;
+            font-size: 11px;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            color: #333;
+            max-height: 500px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-custom">
+        <!-- 页面标题 -->
+        <div class="text-center mb-4">
+            <h1 style="color: white; font-weight: 700; text-shadow: 2px 2px 4px rgba(0,0,0,0.2);">
+                <i class="bi bi-briefcase"></i> 招聘监测系统
+            </h1>
+            <p style="color: rgba(255,255,255,0.9); margin-top: 10px;">
+                自动监测招聘网站，发现心仪职位立即通知
+            </p>
+        </div>
+
+        <!-- 监测状态卡片 -->
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="bi bi-activity"></i> 监测状态</h5>
+            </div>
+            <div class="card-body">
+                <div id="monitorStatus" class="monitor-status stopped">
+                    <div class="text-center">
+                        <div class="status-icon">
+                            <i class="bi bi-stop-circle"></i>
+                        </div>
+                        <h4 id="statusText">监测已停止</h4>
+                        <p class="mb-0" id="statusDetail">点击下方按钮启动监测</p>
+                    </div>
+                </div>
+
+                <div class="row mt-4">
+                    <div class="col-md-3 mb-3">
+                        <div class="stat-card">
+                            <div class="number" id="totalJobs">0</div>
+                            <div class="label">累计发现职位</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <div class="stat-card">
+                            <div class="number" id="newJobsToday">0</div>
+                            <div class="label">今日新职位</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <div class="stat-card">
+                            <div class="number" id="lastCheck">--</div>
+                            <div class="label">上次检查</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <div class="stat-card">
+                            <div class="number" id="runningTime">--</div>
+                            <div class="label">运行时长</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="text-center mt-4">
+                    <button id="startBtn" class="btn btn-primary btn-lg me-2" onclick="startMonitor()">
+                        <i class="bi bi-play-circle"></i> 启动监测
+                    </button>
+                    <button id="stopBtn" class="btn btn-danger btn-lg" onclick="stopMonitor()" disabled>
+                        <i class="bi bi-stop-circle"></i> 停止监测
+                    </button>
+                    <button class="btn btn-outline-primary btn-lg" onclick="testCheck()">
+                        <i class="bi bi-check-circle"></i> 测试检查
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- 实时工作状态 -->
+            <div class="col-lg-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>
+                            <i class="bi bi-cpu"></i> 实时工作状态
+                            <span class="badge bg-secondary ms-2" id="liveStatusBadge">待机</span>
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- 当前任务 -->
+                        <div class="mb-3">
+                            <div class="job-detail-label">
+                                <i class="bi bi-activity"></i> 当前任务
+                            </div>
+                            <div id="currentTask" class="text-muted">等待启动监测...</div>
+                        </div>
+
+                        <!-- 进度条 -->
+                        <div class="mb-3">
+                            <div class="job-detail-label">
+                                <i class="bi bi-speedometer2"></i> 进度
+                            </div>
+                            <div class="progress" style="height: 25px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                     id="progressBar"
+                                     role="progressbar"
+                                     style="width: 0%">
+                                    <span id="progressText">0%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 统计信息 -->
+                        <div class="row mb-3">
+                            <div class="col-6 text-center">
+                                <div class="stat-card py-2">
+                                    <div class="number" id="jobsFound" style="font-size: 24px;">0</div>
+                                    <div class="label" style="font-size: 12px;">已发现职位</div>
+                                </div>
+                            </div>
+                            <div class="col-6 text-center">
+                                <div class="stat-card py-2">
+                                    <div class="number" id="jobsAdded" style="font-size: 24px;">0</div>
+                                    <div class="label" style="font-size: 12px;">已保存职位</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 工作日志 -->
+                        <div>
+                            <div class="job-detail-label">
+                                <i class="bi bi-journal-text"></i> 工作日志
+                            </div>
+                            <div id="workLog" class="bg-dark text-light p-3 rounded"
+                                 style="height: 300px; overflow-y: auto; font-size: 12px; line-height: 1.6;">
+                                <div class="text-muted">等待启动监测...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 职位信息列表 -->
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-list-check"></i> 爬取的职位信息</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- 搜索框 -->
+                        <div class="row g-2 mb-4">
+                            <div class="col-lg-4 col-md-6">
+                                <div class="input-group">
+                                    <span class="input-group-text bg-white border-end-0">
+                                        <i class="bi bi-search"></i>
+                                    </span>
+                                    <input type="text" class="form-control search-box border-start-0"
+                                           id="searchInput" placeholder="搜索职位、公司或关键词..."
+                                           onkeyup="searchJobs()">
+                                </div>
+                            </div>
+                            <div class="col-lg-4 col-md-6">
+                                <div class="input-group">
+                                    <span class="input-group-text bg-white border-end-0">
+                                        <i class="bi bi-tags"></i>
+                                    </span>
+                                    <input type="text" class="form-control search-box border-start-0"
+                                           id="siteLabelFilter" placeholder="按网址标签筛选..."
+                                           aria-label="按网址标签筛选职位"
+                                           oninput="filterJobsBySiteLabel()">
+                                </div>
+                            </div>
+                            <div class="col-lg-4 text-lg-end">
+                                <button class="btn btn-outline-primary me-2" onclick="loadJobs()">
+                                    <i class="bi bi-arrow-clockwise"></i> 刷新
+                                </button>
+                                <button class="btn btn-outline-secondary" onclick="clearJobs()">
+                                    <i class="bi bi-trash"></i> 清除
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 职位列表 -->
+                        <div id="jobsList">
+                            <div class="text-center py-5">
+                                <i class="bi bi-inbox" style="font-size: 64px; color: #ccc;"></i>
+                                <p class="mt-3 text-muted">暂无职位信息</p>
+                                <p class="text-muted small">启动监测后，发现的职位将显示在这里</p>
+                            </div>
+                        </div>
+
+                        <!-- 分页 -->
+                        <nav id="paginationNav" style="display: none;">
+                            <ul class="pagination justify-content-center" id="pagination">
+                            </ul>
+                        </nav>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <!-- 配置表单 -->
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-gear"></i> 监测配置</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="configForm">
+
+                            <!-- 目标招聘网址 -->
+                            <div class="mb-4">
+                                <label class="form-label">
+                                    目标招聘网址
+                                </label>
+                                <div id="sitesContainer">
+                                    <div class="input-group mb-2">
+                                        <input type="text" class="form-control" id="newSiteUrl" 
+                                               placeholder="输入招聘网站首页或固定职位列表URL">
+                                        <select class="form-select" id="newSiteMode" style="max-width: 150px;">
+                                            <option value="search">按关键词搜索</option>
+                                            <option value="fixed">固定网址直抓</option>
+                                        </select>
+                                        <button class="btn btn-primary" type="button" onclick="addSite()">
+                                            <i class="bi bi-plus"></i> 添加
+                                        </button>
+                                    </div>
+                                    <div id="sitesList"></div>
+                                </div>
+                                <div class="form-text">
+                                    “按关键词搜索”适合招聘首页或未筛选列表页，程序会逐个使用下方的职位关键词搜索。
+                                    “固定网址直抓”会保留 URL 已有的筛选条件，不提交职位关键词，只抓取该 URL 返回的职位。
+                                </div>
+                            </div>
+
+                            <!-- 职位关键词 -->
+                            <div class="mb-4">
+                                <label class="form-label">
+                                    <i class="bi bi-search"></i> 职位关键词
+                                </label>
+                                <div class="tag-input" id="keywordsInput">
+                                    <input type="text" placeholder="输入关键词，按回车添加" 
+                                           onkeypress="if(event.key==='Enter') addTag(event, 'keywords')">
+                                </div>
+                                <div class="form-text">
+                                    多个关键词会分别搜索和抓取，例如网址标签“美团”与关键词“法务”会生成职位标签“美团法务”。
+                                </div>
+                            </div>
+
+                            <!-- 城市 -->
+                            <div class="mb-4">
+                                <label class="form-label">
+                                    <i class="bi bi-geo-alt"></i> 城市（可选）
+                                </label>
+                                <div class="tag-input" id="citiesInput">
+                                    <input type="text" placeholder="输入城市，按回车添加" 
+                                           onkeypress="if(event.key==='Enter') addTag(event, 'cities')">
+                                </div>
+                                <div class="form-text">留空表示不限制</div>
+                            </div>
+
+                            <!-- 排除关键词 -->
+                            <div class="mb-4">
+                                <label class="form-label">
+                                    <i class="bi bi-x-circle"></i> 排除关键词（可选）
+                                </label>
+                                <div class="tag-input" id="excludeInput">
+                                    <input type="text" placeholder="输入要排除的关键词，按回车添加" 
+                                           onkeypress="if(event.key==='Enter') addTag(event, 'exclude')">
+                                </div>
+                                <div class="form-text">例如：实习、兼职</div>
+                            </div>
+
+                            <!-- Gemini API Key -->
+                            <div class="mb-4">
+                                <label class="form-label">
+                                    <i class="bi bi-key"></i> Gemini API Key (用于智能分析)
+                                </label>
+                                <input type="password" class="form-control" id="geminiApiKey" 
+                                       placeholder="输入 Gemini API Key">
+                                <div class="form-text">留空时不启用 AI 筛选；密钥只保存在本机配置文件中。</div>
+                            </div>
+
+                            <div class="mb-4">
+                                <label class="form-label" for="aiFilterPrompt">
+                                    <i class="bi bi-stars"></i> AI 筛选要求（可选）
+                                </label>
+                                <textarea class="form-control" id="aiFilterPrompt" rows="3"
+                                          placeholder="例如：只保留偏公司战略、商业分析或 CEO 办公室方向的职位"></textarea>
+                                <div class="form-text">API Key 和筛选要求都填写时才会调用 Gemini。</div>
+                                <input type="hidden" id="geminiModel" value="gemini-3.5-flash-lite">
+                            </div>
+
+                            <!-- 邮箱配置 -->
+                            <div class="mb-4">
+                                <label class="form-label">
+                                    <i class="bi bi-envelope"></i> 邮箱配置
+                                </label>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">发件邮箱</label>
+                                        <input type="email" class="form-control" id="emailSender" 
+                                               placeholder="your_email@gmail.com">
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">邮件授权码</label>
+                                        <input type="password" class="form-control" id="emailAuthCode" 
+                                               placeholder="输入邮箱授权码">
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">接收通知邮箱</label>
+                                        <input type="email" class="form-control" id="emailReceiver" 
+                                               placeholder="your_email@gmail.com">
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">SMTP服务器</label>
+                                        <input type="text" class="form-control" id="smtpServer" 
+                                               placeholder="smtp.gmail.com">
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">SMTP端口</label>
+                                        <input type="number" class="form-control" id="smtpPort" 
+                                               placeholder="587" value="587">
+                                    </div>
+                                </div>
+                                <div class="d-flex justify-content-end">
+                                    <button type="button" class="btn btn-outline-info"
+                                            onclick="testEmail()">
+                                        <i class="bi bi-send"></i> 测试邮件发送
+                                    </button>
+                                </div>
+                                <div class="form-text text-end mt-2">
+                                    请先保存当前邮箱配置，再发送测试邮件。
+                                </div>
+                            </div>
+
+                            <!-- 监测间隔 -->
+                            <div class="mb-4">
+                                <label class="form-label">
+                                    <i class="bi bi-clock"></i> 监测间隔（小时）
+                                </label>
+                                <input type="number" class="form-control" id="checkInterval" 
+                                       placeholder="2" min="1" max="24" value="2">
+                                <div class="form-text">建议设置为2-4小时，避免频繁请求</div>
+                            </div>
+
+                            <!-- 保存按钮 -->
+                            <div class="text-center">
+                                <button type="submit" class="btn btn-primary btn-lg">
+                                    <i class="bi bi-save"></i> 保存配置
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GitHub 同步与使用提示 -->
+            <div class="col-lg-4">
+                <div class="card" id="githubSyncCard">
+                    <div class="card-header">
+                        <h5><i class="bi bi-github"></i> GitHub 同步</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label" for="githubRepository">GitHub 仓库</label>
+                            <input type="text" class="form-control" id="githubRepository"
+                                   placeholder="owner/repository 或仓库网址">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="githubToken">Personal Access Token</label>
+                            <input type="password" class="form-control" id="githubToken"
+                                   placeholder="输入仅限该仓库的 Token"
+                                   autocomplete="off">
+                            <div class="form-text">
+                                Token 需要 Actions 读取和 Secrets 写入权限，只保存在本机
+                                <code>github_sync.yaml</code>，不会上传到仓库。
+                            </div>
+                        </div>
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-outline-secondary"
+                                    id="saveGithubSettingsBtn"
+                                    onclick="saveGithubSyncSettings()">
+                                <i class="bi bi-link-45deg"></i> 保存连接
+                            </button>
+                            <button type="button" class="btn btn-primary"
+                                    id="uploadGithubConfigBtn"
+                                    onclick="uploadConfigToGithub()">
+                                <i class="bi bi-cloud-arrow-up"></i> 一键上传配置
+                            </button>
+                            <button type="button" class="btn btn-outline-primary"
+                                    id="downloadGithubJobsBtn"
+                                    onclick="downloadJobsFromGithub()">
+                                <i class="bi bi-cloud-arrow-down"></i> 一键下载职位数据
+                            </button>
+                        </div>
+                        <div class="form-text mt-3" id="githubSyncStatus">
+                            下载前请先停止本地监测；覆盖前会自动备份现有数据库。
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-info-circle"></i> 使用提示</h5>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-unstyled">
+                            <li class="mb-3">
+                                <i class="bi bi-check-circle text-success"></i>
+                                <strong>启动监测：</strong>点击"启动监测"按钮开始自动监测
+                            </li>
+                            <li class="mb-3">
+                                <i class="bi bi-check-circle text-success"></i>
+                                <strong>配置保存：</strong>修改配置后记得点击"保存配置"
+                            </li>
+                            <li class="mb-3">
+                                <i class="bi bi-check-circle text-success"></i>
+                                <strong>邮箱授权码：</strong>需要从邮箱设置中获取，不是邮箱密码
+                            </li>
+                            <li class="mb-3">
+                                <i class="bi bi-check-circle text-success"></i>
+                                <strong>测试检查：</strong>使用"测试检查"验证配置是否正确
+                            </li>
+                            <li>
+                                <i class="bi bi-check-circle text-success"></i>
+                                <strong>注意频率：</strong>监测间隔不要太短，避免被反爬虫
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 消息提示 -->
+    <div id="messageContainer"></div>
+
+    <!-- 职位详情模态框 -->
+    <div class="modal fade" id="jobModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="jobModalTitle">职位详情</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="jobModalBody">
+                    <!-- 职位详情内容 -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <a id="jobModalLink" href="#" target="_blank" class="btn btn-primary">
+                        <i class="bi bi-box-arrow-up-right"></i> 打开原始链接
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

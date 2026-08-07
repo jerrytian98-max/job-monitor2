@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local environment
+.env
+.env.*
+
+# Personal configuration. Only the sanitized template is committed.
+config*.yaml
+config*.yml
+!config.example.yaml
+
+# Local and GitHub Actions runtime state
+jobs*.db
+jobs*.db-*
+jobs*.db.*
+jobs_cache*.json
+app*.log
+github_sync.yaml
+backups/
+
+# Generated GitHub Secret payload
+.job-monitor-config*.b64
+
+# Atomic-write leftovers
+config*.tmp
