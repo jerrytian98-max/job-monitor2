@@ -2,8 +2,8 @@ name: Daily Job Monitor
 
 on:
   schedule:
-    # UTC 00:00，即新加坡/北京时间每天 08:00。
-    - cron: '0 0 * * *'
+ # UTC 13:00，即北京时间每周一和周四 21:00。
+    - cron: '0 13 * * 1,4'
   workflow_dispatch:
 
 concurrency:
