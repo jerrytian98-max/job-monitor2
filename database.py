@@ -159,13 +159,17 @@ class JobDatabase:
 
     @staticmethod
     def _merge_site_labels(rows: List[Dict]) -> str:
-        labels = []
+        """Return the earliest non-empty label, including legacy data.
+
+        Rows are ordered by first discovery before reaching here.  Older
+        versions could store a combined ``标签一 / 标签二`` value; retain only
+        its first part so existing cards follow the same first-hit rule.
+        """
         for row in rows:
-            for label in str(row.get("site_label") or "").split(" / "):
-                label = label.strip()
-                if label and label not in labels:
-                    labels.append(label)
-        return " / ".join(labels)
+            label = str(row.get("site_label") or "").split(" / ", 1)[0].strip()
+            if label:
+                return label
+        return ""
 
     def _backup_before_deduplication(self, conn: sqlite3.Connection) -> str:
         backup_path = (
@@ -269,7 +273,7 @@ class JobDatabase:
             conn.close()
 
     def update_job_site_label(self, job: Dict) -> bool:
-        """Refresh the searchable label of an existing deduplicated job."""
+        """Fill a missing label without replacing the first captured label."""
         site_label = str(job.get('site_label') or '').strip()
         if not site_label:
             return False
@@ -282,9 +286,9 @@ class JobDatabase:
                 UPDATE jobs
                 SET site_label = ?
                 WHERE job_hash = ?
-                  AND COALESCE(site_label, '') <> ?
+                  AND TRIM(COALESCE(site_label, '')) = ''
                 ''',
-                (site_label, self._generate_hash(job), site_label),
+                (site_label, self._generate_hash(job)),
             )
             conn.commit()
             return cursor.rowcount > 0

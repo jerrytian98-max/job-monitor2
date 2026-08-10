@@ -84,7 +84,10 @@ class JobMatcher:
 
         if state:
             site_label = str(job.get('site_label') or '').strip()
-            if site_label and site_label != str(state.get('site_label') or '').strip():
+            # A job keeps the first label it was saved with.  It may be found
+            # by another configured keyword later, but that must not replace
+            # the original keyword label (for example 腾讯法律 -> 腾讯法务).
+            if site_label and not str(state.get('site_label') or '').strip():
                 self.database.update_job_site_label(job)
             # 兼容旧版本：旧 JSON 缓存记录过通知时间，但 SQLite 没有同步。
             if legacy_notified and not state.get('is_notified'):

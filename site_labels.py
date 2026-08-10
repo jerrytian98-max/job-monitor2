@@ -133,16 +133,25 @@ def combine_site_keyword_labels(
     site_label: str,
     keywords: Iterable[str],
 ) -> str:
-    """Build one searchable label string for every keyword that found a job."""
+    """Build a label from the first keyword that found the job.
+
+    A single job can appear in more than one keyword result.  The first
+    captured keyword is its source label and must remain stable, instead of
+    turning the card into a composite label such as ``腾讯法律 / 腾讯法务``.
+
+    The plural function name is kept for callers from older releases.  Lists
+    and tuples retain scraper discovery order; a set has no discovery order,
+    so its first deterministic value is used as a compatibility fallback.
+    """
     if isinstance(keywords, str):
         keywords = [keywords]
 
-    labels = []
-    for keyword in keywords or []:
-        label = combine_site_keyword_label(site_label, keyword)
-        if label and label not in labels:
-            labels.append(label)
+    if isinstance(keywords, set):
+        keywords = sorted(keywords, key=lambda value: str(value or ''))
 
-    if not labels:
-        labels.append(combine_site_keyword_label(site_label, ''))
-    return ' / '.join(labels)[:500]
+    for keyword in keywords or []:
+        clean_keyword = str(keyword or '').strip()
+        if clean_keyword:
+            return combine_site_keyword_label(site_label, clean_keyword)
+
+    return combine_site_keyword_label(site_label, '')

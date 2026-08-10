@@ -102,20 +102,31 @@ class JobListingTests(unittest.TestCase):
         self.assertEqual([job['title'] for job in jobs], ['法务职位'])
         self.assertEqual(self.db.count_jobs(site_label_keyword='法务'), 1)
 
-    def test_existing_job_label_can_be_refreshed_with_multiple_keywords(self):
+    def test_existing_job_keeps_the_first_captured_keyword_label(self):
         self.add_job('重叠职位', '2026-03-10', '美团法律')
         job = {
             'title': '重叠职位',
             'url': 'https://jobs.example.com/重叠职位',
-            'site_label': '美团法律 / 美团法务',
+            'site_label': '美团法务',
         }
 
-        self.assertTrue(self.db.update_job_site_label(job))
+        self.assertFalse(self.db.update_job_site_label(job))
         self.assertEqual(self.db.count_jobs(site_label_keyword='美团法律'), 1)
-        self.assertEqual(self.db.count_jobs(site_label_keyword='美团法务'), 1)
+        self.assertEqual(self.db.count_jobs(site_label_keyword='美团法务'), 0)
         self.assertEqual(
             self.db.get_all_jobs()[0]['site_label'],
-            '美团法律 / 美团法务',
+            '美团法律',
+        )
+
+    def test_legacy_combined_label_is_reduced_to_the_first_keyword(self):
+        self.add_job('旧标签职位', '2026-03-10', '腾讯法律 / 腾讯法务')
+
+        # Database startup migration also normalizes previously saved cards.
+        self.db._init_db()
+
+        self.assertEqual(
+            self.db.get_all_jobs()[0]['site_label'],
+            '腾讯法律',
         )
 
     def test_api_backfills_old_rows_and_filters_by_configured_label(self):

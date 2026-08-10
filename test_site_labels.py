@@ -68,10 +68,10 @@ class SiteLabelTests(unittest.TestCase):
             '腾讯法务',
         )
 
-    def test_combines_multiple_searchable_labels_without_duplicate_cards(self):
+    def test_keeps_the_first_keyword_label_when_a_job_matches_multiple_keywords(self):
         self.assertEqual(
             combine_site_keyword_labels('美团', ['法律', '法务', '法律']),
-            '美团法律 / 美团法务',
+            '美团法律',
         )
 
     def test_old_sites_default_to_keyword_search_and_fixed_mode_is_preserved(self):
