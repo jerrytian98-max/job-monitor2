@@ -2,8 +2,8 @@ name: Daily Job Monitor
 
 on:
   schedule:
- # UTC 13:00，即北京时间每周一和周四 21:00。
-    - cron: '0 13 * * 1,4'
+    # UTC 13:00，即北京时间每周二和周五 21:00。
+    - cron: '0 13 * * 2,5'
   workflow_dispatch:
 
 concurrency:
