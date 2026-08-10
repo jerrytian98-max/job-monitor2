@@ -120,7 +120,7 @@ class EmailNotifier:
         jobs: List[Dict],
         new_job_count: int = None,
     ) -> str:
-        """创建兼容常见邮箱客户端的静态职位卡片。"""
+        """创建面向网易邮箱的可折叠职位卡片。"""
         new_count = len(jobs) if new_job_count is None else new_job_count
         html = f"""
         <!DOCTYPE html>
@@ -128,6 +128,12 @@ class EmailNotifier:
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                .job-card summary::-webkit-details-marker {{ display:none; }}
+                .job-card summary::marker {{ content:""; }}
+                .job-card[open] .job-collapsed-icon {{ display:none !important; }}
+                .job-card[open] .job-expanded-icon {{ display:inline !important; }}
+            </style>
         </head>
         <body style="margin:0;padding:0;background:#f3f4f8;color:#2f3441;
                      font-family:Arial,'Microsoft YaHei',sans-serif;">
@@ -186,13 +192,15 @@ class EmailNotifier:
                 )
 
             html += f"""
-                <div style="margin-top:14px;border:1px solid #dfe2eb;
-                            border-radius:14px;background:#ffffff;overflow:hidden;">
-                    <table role="presentation" width="100%" cellpadding="0"
-                           cellspacing="0" style="border-collapse:separate;">
-                        <tr>
-                            <td style="padding:14px 8px 14px 16px;width:1%;
-                                       white-space:nowrap;vertical-align:middle;">
+                <details class="job-card"
+                         style="display:block;margin-top:14px;border:1px solid #dfe2eb;
+                                border-radius:14px;background:#ffffff;overflow:hidden;">
+                    <summary style="display:block;padding:0;cursor:pointer;
+                                    list-style:none;outline:none;">
+                        <span role="presentation"
+                              style="display:table;width:100%;border-collapse:separate;">
+                            <span style="display:table-cell;padding:14px 8px 14px 16px;
+                                         width:1%;white-space:nowrap;vertical-align:middle;">
                                 <span style="display:inline-block;min-width:58px;
                                              max-width:130px;padding:6px 10px;
                                              border:1px solid {label_border};
@@ -201,19 +209,27 @@ class EmailNotifier:
                                              font-weight:700;text-align:center;">
                                     {site_label}
                                 </span>
-                            </td>
-                            <td style="padding:14px 8px;vertical-align:middle;
-                                       font-size:16px;line-height:1.45;">
+                            </span>
+                            <span style="display:table-cell;padding:14px 8px;
+                                         vertical-align:middle;font-size:16px;
+                                         line-height:1.45;text-align:left;">
                                 {title_html}{new_badge}
-                            </td>
-                            <td style="padding:14px 16px 14px 8px;
-                                       vertical-align:middle;text-align:right;
-                                       color:#737b8c;font-size:13px;
-                                       white-space:nowrap;">
+                            </span>
+                            <span style="display:table-cell;padding:14px 8px;
+                                         width:1%;vertical-align:middle;text-align:right;
+                                         color:#737b8c;font-size:13px;white-space:nowrap;">
                                 {date}
-                            </td>
-                        </tr>
-                    </table>
+                            </span>
+                            <span style="display:table-cell;padding:14px 16px 14px 2px;
+                                         width:1%;vertical-align:middle;text-align:right;
+                                         color:#667eea;font-size:18px;font-weight:700;
+                                         white-space:nowrap;">
+                                <span class="job-collapsed-icon">＋</span>
+                                <span class="job-expanded-icon"
+                                      style="display:none;">－</span>
+                            </span>
+                        </span>
+                    </summary>
                     <div style="border-top:1px solid #eceef5;padding:15px 16px;
                                 background:#fbfbfd;">
                         <table role="presentation" width="100%" cellpadding="0"
@@ -257,14 +273,14 @@ class EmailNotifier:
                         <div style="margin-top:2px;color:#555c68;font-size:14px;
                                     line-height:1.65;">{description}</div>
                     </div>
-                </div>
+                </details>
             """
 
         html += f"""
                 <div style="padding:22px 8px 8px;text-align:center;
                             color:#7f8795;font-size:12px;line-height:1.7;">
                     <div>邮件发送时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
-                    <div>点击职位名称可直接打开招聘网站的岗位页面</div>
+                    <div>点击卡片可展开详情；点击职位名称可直接打开岗位页面</div>
                 </div>
             </div>
         </body>
@@ -356,21 +372,117 @@ class EmailNotifier:
             return False
             
         try:
-            msg = MIMEMultipart()
+            msg = MIMEMultipart('alternative')
             msg['Subject'] = '招聘监测系统 - 邮件配置测试'
             msg['From'] = self.sender
             msg['To'] = receiver
-            
-            content = f"""
-            您好！
-            
-            这是一封来自招聘监测系统的测试邮件。
-            如果您收到了这封邮件，说明您的邮件配置是正确的！
-            
-            发送时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """
-            
-            msg.attach(MIMEText(content, 'plain', 'utf-8'))
+
+            now = datetime.now()
+            preview_jobs = [
+                {
+                    'title': '高级法务顾问（点击卡片展开）',
+                    'site_label': '腾讯法律',
+                    'company': '示例科技公司',
+                    'city': '深圳',
+                    'salary': '30-45K·16薪',
+                    'publish_time': now.strftime('%Y-%m-%d'),
+                    'found_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'source_site': '邮件折叠测试',
+                    'description': (
+                        '岗位职责：\n'
+                        '1. 负责互联网产品、平台服务及商业合作项目的法律支持，参与业务方案设计、风险评估和合同谈判。\n'
+                        '2. 起草、审核并持续优化采购、销售、技术许可、广告合作及保密协议等常用合同模板。\n'
+                        '3. 跟踪互联网、人工智能及消费者权益保护领域的监管政策，形成清晰可执行的合规建议。\n'
+                        '任职要求：具有三年以上企业法务或律师事务所经验，具备良好的沟通、研究和跨团队协作能力。'
+                    ),
+                    'url': '',
+                    '_is_new_this_run': True,
+                },
+                {
+                    'title': '数据合规专家',
+                    'site_label': '腾讯合规',
+                    'company': '示例云计算公司',
+                    'city': '北京',
+                    'salary': '35-50K·15薪',
+                    'publish_time': now.strftime('%Y-%m-%d'),
+                    'found_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'source_site': '邮件折叠测试',
+                    'description': (
+                        '岗位职责：\n'
+                        '1. 建立个人信息保护、数据安全和跨境数据传输相关制度，推动制度在产品研发与运营流程中落地。\n'
+                        '2. 组织开展隐私影响评估、数据资产梳理和供应商合规审查，识别高风险处理活动并制定整改计划。\n'
+                        '3. 为大模型训练、数据标注、日志分析及用户画像等场景提供专项合规意见。\n'
+                        '任职要求：熟悉个人信息保护法、数据安全法及网络安全法，能够独立完成复杂项目的合规分析。'
+                    ),
+                    'url': '',
+                    '_is_new_this_run': True,
+                },
+                {
+                    'title': '商业合同法务经理',
+                    'site_label': '字节法务',
+                    'company': '示例内容平台',
+                    'city': '上海',
+                    'salary': '28-42K·15薪',
+                    'publish_time': now.strftime('%Y-%m-%d'),
+                    'found_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'source_site': '邮件折叠测试',
+                    'description': (
+                        '岗位职责：\n'
+                        '1. 支持广告、电商、内容版权及市场营销业务，独立处理日常合同审核、商务谈判和法律咨询。\n'
+                        '2. 结合业务实际整理高频风险问题，建立标准条款、审查清单和合同全生命周期管理机制。\n'
+                        '3. 协助处理客户投诉、知识产权争议和商业纠纷，并与外部律师共同制定解决方案。\n'
+                        '任职要求：法律基础扎实，能够在业务效率与风险控制之间作出合理判断，有平台型企业经验者优先。'
+                    ),
+                    'url': '',
+                    '_is_new_this_run': True,
+                },
+                {
+                    'title': '劳动用工合规负责人',
+                    'site_label': '美团风控',
+                    'company': '示例生活服务集团',
+                    'city': '成都',
+                    'salary': '25-38K·14薪',
+                    'publish_time': now.strftime('%Y-%m-%d'),
+                    'found_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'source_site': '邮件折叠测试',
+                    'description': (
+                        '岗位职责：\n'
+                        '1. 为招聘、绩效、薪酬、员工关系和人员优化等场景提供劳动法律支持，审核相关制度及操作方案。\n'
+                        '2. 处理劳动仲裁、诉讼和重大员工争议，复盘案件并推动人力资源流程持续改进。\n'
+                        '3. 面向业务管理者开展劳动用工培训，定期发布典型案例、风险提示和实务操作指引。\n'
+                        '任职要求：熟悉劳动合同法及各地司法实践，具备独立处理复杂员工关系事项的经验。'
+                    ),
+                    'url': '',
+                    '_is_new_this_run': True,
+                },
+                {
+                    'title': '投资并购与战略法务',
+                    'site_label': '阿里战略',
+                    'company': '示例数字商业公司',
+                    'city': '杭州',
+                    'salary': '40-60K·16薪',
+                    'publish_time': now.strftime('%Y-%m-%d'),
+                    'found_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'source_site': '邮件折叠测试',
+                    'description': (
+                        '岗位职责：\n'
+                        '1. 参与境内外股权投资、并购、合资及战略合作项目，负责交易结构论证、法律尽调和风险清单整理。\n'
+                        '2. 起草并谈判投资协议、股东协议、增资协议及交割文件，协调财务、税务和外部顾问推进项目实施。\n'
+                        '3. 跟踪投后治理、承诺事项和退出安排，及时识别重大变化并向管理层提供决策建议。\n'
+                        '任职要求：具备五年以上投资并购相关经验，英文可作为工作语言，能够同时管理多个复杂交易项目。'
+                    ),
+                    'url': '',
+                    '_is_new_this_run': True,
+                },
+            ]
+            html_content = self._create_email_content(
+                preview_jobs,
+                new_job_count=len(preview_jobs),
+            )
+
+            # 网易邮箱可能优先展示 multipart/alternative 中的纯文本部分；
+            # 测试邮件与正式职位通知保持一致，只提供 HTML 卡片。
+            msg.attach(MIMEText(html_content, 'html', 'utf-8'))
             
             logger.info(f"正在发送测试邮件到 {receiver}...")
             

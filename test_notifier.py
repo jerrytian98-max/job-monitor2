@@ -60,7 +60,32 @@ class EmailNotifierTests(unittest.TestCase):
             '【字节战略、字节法律】发现了 2 个新职位',
         )
 
-    def test_email_body_uses_static_job_cards_and_linked_title(self):
+    def test_test_email_contains_collapsible_card_preview(self):
+        with patch('notifier.smtplib.SMTP_SSL') as smtp_ssl:
+            server = smtp_ssl.return_value.__enter__.return_value
+            self.assertTrue(self.notifier.send_test_email())
+
+        sent_message = server.send_message.call_args.args[0]
+        self.assertEqual(len(sent_message.get_payload()), 1)
+        html_part = next(
+            part
+            for part in sent_message.get_payload()
+            if part.get_content_type() == 'text/html'
+        )
+        html = html_part.get_payload(decode=True).decode(
+            html_part.get_content_charset()
+        )
+        self.assertEqual(html.count('<details class="job-card"'), 5)
+        self.assertIn('本轮发现 5 个新职位', html)
+        self.assertIn('高级法务顾问（点击卡片展开）', html)
+        self.assertIn('数据合规专家', html)
+        self.assertIn('商业合同法务经理', html)
+        self.assertIn('劳动用工合规负责人', html)
+        self.assertIn('投资并购与战略法务', html)
+        self.assertIn('跨境数据传输', html)
+        self.assertIn('合同全生命周期管理机制', html)
+
+    def test_email_body_uses_collapsible_job_cards_and_linked_title(self):
         html = self.notifier._create_email_content([
             {
                 'title': '战略分析师 职位 ID：A123',
@@ -78,6 +103,12 @@ class EmailNotifierTests(unittest.TestCase):
         ], new_job_count=1)
 
         self.assertIn('爬取的职位信息', html)
+        self.assertIn('<details class="job-card"', html)
+        self.assertIn('<summary', html)
+        details_opening_tag = html.split('<details', 1)[1].split('>', 1)[0]
+        self.assertNotIn(' open', details_opening_tag)
+        self.assertIn('job-collapsed-icon', html)
+        self.assertIn('job-expanded-icon', html)
         self.assertIn('字节战略', html)
         self.assertIn('2026-07-26', html)
         self.assertIn('负责业务战略分析', html)
