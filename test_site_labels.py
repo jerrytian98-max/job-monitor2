@@ -57,6 +57,10 @@ class SiteLabelTests(unittest.TestCase):
             ),
             '夸克',
         )
+        self.assertEqual(
+            derive_site_label('https://jobs.bilibili.com/social/positions?type=3'),
+            'B站',
+        )
 
     def test_combines_base_site_label_and_search_keyword(self):
         self.assertEqual(combine_site_keyword_label('美团', '法务'), '美团法务')

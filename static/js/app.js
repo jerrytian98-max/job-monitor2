@@ -513,7 +513,8 @@ function deriveSiteLabel(url) {
             'talent.ele.me': '饿了么',
             'careers.aliyun.com': '阿里云',
             'job.xiaohongshu.com': '小红书',
-            'careers.pddglobalhr.com': '拼多多'
+            'careers.pddglobalhr.com': '拼多多',
+            'jobs.bilibili.com': 'B站'
         };
         if (parsed.hostname === 'app.mokahr.com') {
             const lowerUrl = url.toLowerCase();

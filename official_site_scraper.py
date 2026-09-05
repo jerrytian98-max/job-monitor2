@@ -357,6 +357,15 @@ class OfficialSiteScraper:
         if host == "job.xiaohongshu.com" and "/social/position" in parsed.path:
             query["positionName"] = term
             return urlunparse(parsed._replace(query=urlencode(query)))
+        if (
+            host == "jobs.bilibili.com"
+            and parsed.path.rstrip("/") == "/social/positions"
+        ):
+            # Bilibili persists the search term as ``name`` on the social
+            # recruitment list URL, so opening it directly avoids default
+            # job results being treated as a keyword search.
+            query["name"] = term
+            return urlunparse(parsed._replace(query=urlencode(query)))
         if host == "careers.tencent.com":
             query = {"keyword": term}
             return urlunparse(
@@ -799,6 +808,22 @@ class OfficialSiteScraper:
                 if job
             ]
 
+        # Bilibili social recruitment: the rendered list is backed by
+        # /api/srs/position/positionList and stores jobs in data.list.
+        bilibili_records = self._dig(payload, "data", "list")
+        if (
+            "jobs.bilibili.com" in urlparse(target_url).netloc.lower()
+            and "/api/srs/position/positionlist" in response_url.lower()
+            and isinstance(bilibili_records, list)
+        ):
+            return [
+                job
+                for record in bilibili_records
+                if isinstance(record, dict)
+                for job in [self._from_bilibili(record, target_url)]
+                if job
+            ]
+
         # Xiaohongshu official recruitment API.
         xhs_records = self._dig(payload, "data", "list")
         if (
@@ -937,6 +962,31 @@ class OfficialSiteScraper:
                 ("岗位类别", record.get("positionCategoryCode")),
             ),
             publish_time=record.get("updateTime"),
+            target_url=target_url,
+        )
+
+    def _from_bilibili(self, record: Dict, target_url: str) -> Optional[Dict]:
+        """Map a Bilibili social-recruitment result to the common job shape."""
+        position_id = self._text(record.get("id"))
+        title = self._text(record.get("positionName"))
+        if not position_id or not title:
+            return None
+
+        parsed = urlparse(target_url)
+        detail_url = (
+            f"{parsed.scheme}://{parsed.netloc}/social/positions/{position_id}"
+        )
+        return self._job(
+            title=title,
+            company="哔哩哔哩",
+            city=record.get("workLocation") or record.get("workCity"),
+            url=detail_url,
+            description=self._sections(
+                ("岗位职责与要求", record.get("positionDescription")),
+                ("岗位类别", record.get("postCodeName")),
+                ("职位类型", record.get("positionTypeName")),
+            ),
+            publish_time=record.get("pushTime") or record.get("ctime"),
             target_url=target_url,
         )
 
@@ -1478,6 +1528,8 @@ class OfficialSiteScraper:
             return "淘天"
         if "xiaohongshu" in host:
             return "小红书"
+        if "bilibili.com" in host:
+            return "哔哩哔哩"
         if "bytedance" in host:
             return "字节跳动"
         if "moonshot" in lowered:

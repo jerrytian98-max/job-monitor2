@@ -24,6 +24,7 @@ KNOWN_SITE_LABELS = {
     'careers.aliyun.com': '阿里云',
     'job.xiaohongshu.com': '小红书',
     'careers.pddglobalhr.com': '拼多多',
+    'jobs.bilibili.com': 'B站',
 }
 SITE_MODE_SEARCH = 'search'
 SITE_MODE_FIXED = 'fixed'

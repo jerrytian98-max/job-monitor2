@@ -151,6 +151,41 @@ class ScraperTests(unittest.TestCase):
             "#/official/social/job-info/24968",
         )
 
+    def test_bilibili_api_payload_maps_to_searchable_job_details(self):
+        scraper = OfficialSiteScraper()
+        target_url = "https://jobs.bilibili.com/social/positions?type=3"
+        payload = {
+            "code": 0,
+            "data": {
+                "total": 1,
+                "list": [{
+                    "id": 28481,
+                    "positionName": "法务合规负责人",
+                    "positionDescription": "负责基金法律支持与合规管理",
+                    "positionTypeName": "全职",
+                    "postCodeName": "大职能类",
+                    "pushTime": "2026-05-28 19:42:25",
+                    "workLocation": "上海",
+                }],
+            },
+        }
+
+        jobs = scraper._jobs_from_payload(
+            payload,
+            "https://jobs.bilibili.com/api/srs/position/positionList",
+            target_url,
+        )
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["company"], "哔哩哔哩")
+        self.assertEqual(jobs[0]["city"], "上海")
+        self.assertIn("基金法律支持", jobs[0]["description"])
+        self.assertIn("大职能类", jobs[0]["description"])
+        self.assertEqual(
+            jobs[0]["url"],
+            "https://jobs.bilibili.com/social/positions/28481",
+        )
+
     def test_rendered_card_merge_prefers_full_description(self):
         scraper = OfficialSiteScraper()
         short = {
@@ -326,11 +361,17 @@ class ScraperTests(unittest.TestCase):
             "https://careers.tencent.com/jobopportunity.html",
             "法务",
         )
+        bilibili_url = OfficialSiteScraper._keyword_navigation_url(
+            "https://jobs.bilibili.com/social/positions?type=3",
+            "法务",
+        )
 
         self.assertIn("keywords=%E6%B3%95%E5%BE%8B", byte_url)
         self.assertIn("limit=30", byte_url)
         self.assertIn("positionName=%E6%B3%95%E5%8A%A1", xhs_url)
         self.assertIn("/search.html?keyword=%E6%B3%95%E5%8A%A1", tencent_url)
+        self.assertIn("name=%E6%B3%95%E5%8A%A1", bilibili_url)
+        self.assertIn("type=3", bilibili_url)
 
     def test_response_keyword_guard_rejects_delayed_default_list(self):
         default_response = Mock()
