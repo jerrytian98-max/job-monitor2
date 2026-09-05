@@ -3,12 +3,13 @@ import argparse
 import subprocess
 import sys
 from config_bootstrap import ensure_config_file
+from profile_config import profile_display_name, profile_from_config_filename
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def start_profile(profile_name, config_name, once=False):
-    print(f"\n{'='*50}\n正在运行分身: {profile_name if profile_name else '默认(default)'}\n{'='*50}")
+    print(f"\n{'='*50}\n正在运行: {profile_display_name(profile_name)}\n{'='*50}")
     env = os.environ.copy()
     if profile_name:
         env['JOB_PROFILE'] = profile_name
@@ -46,8 +47,8 @@ if __name__ == '__main__':
     processes = []
     try:
         for config_name in sorted(set(configs)):
-            # config.yaml -> ''；config_user2.yaml -> 'user2'
-            profile = config_name[len('config'):-len('.yaml')].lstrip('_')
+            # config.yaml -> ''（用户一）；config_user2.yaml -> 'user2'（用户二）
+            profile = profile_from_config_filename(config_name)
             processes.append(start_profile(profile, config_name, once=args.once))
 
         exit_codes = [process.wait() for process in processes]

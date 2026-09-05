@@ -8,6 +8,8 @@ import re
 import tempfile
 from typing import Union
 
+from profile_config import config_filename
+
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_TEMPLATE = BASE_DIR / "config.example.yaml"
@@ -15,6 +17,11 @@ GENERATED_CONFIG_NAME = re.compile(
     r"^config(?:_user[A-Za-z0-9_-]+)?\.ya?ml$",
     re.IGNORECASE,
 )
+
+
+def config_name_for_profile(profile: object = "") -> str:
+    """Compatibility wrapper used by launchers and cloud configuration code."""
+    return config_filename(profile)
 
 
 def resolve_config_path(config_file: Union[str, os.PathLike]) -> Path:

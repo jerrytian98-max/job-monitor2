@@ -107,6 +107,38 @@ class ConfigPrivacyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不安全"):
             github_config.restore_secret(encoded)
 
+    def test_selected_profile_secret_does_not_restore_the_other_user(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.yaml").write_text(
+                yaml.safe_dump(sample_config("user1-secret"), allow_unicode=True),
+                encoding="utf-8",
+            )
+            (root / "config_user2.yaml").write_text(
+                yaml.safe_dump(sample_config("user2-secret"), allow_unicode=True),
+                encoding="utf-8",
+            )
+            with patch.object(github_config, "BASE_DIR", root):
+                encoded = github_config.build_secret_value(
+                    include_sensitive_values=True,
+                    config_names=["config_user2.yaml"],
+                )
+
+            payload = yaml.safe_load(base64.b64decode(encoded).decode("utf-8"))
+            self.assertEqual(set(payload["configs"]), {"config_user2.yaml"})
+
+            with tempfile.TemporaryDirectory() as restore_directory:
+                target = Path(restore_directory)
+                with patch.object(github_config, "BASE_DIR", target):
+                    restored = github_config.restore_secret(
+                        encoded,
+                        config_names=["config_user2.yaml"],
+                        secret_env_name="JOB_MONITOR_USER2_CONFIG_B64",
+                    )
+                self.assertEqual([path.name for path in restored], ["config_user2.yaml"])
+                self.assertTrue((target / "config_user2.yaml").exists())
+                self.assertFalse((target / "config.yaml").exists())
+
     def test_profile_credentials_win_and_environment_fills_blanks(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"

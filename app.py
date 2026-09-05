@@ -8,12 +8,19 @@ import yaml
 
 import os
 from config_bootstrap import ensure_config_file
+from profile_config import (
+    config_filename,
+    normalize_profile,
+    profile_display_name,
+    profile_suffix,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROFILE = os.environ.get('JOB_PROFILE', '')
-PROFILE_SUFFIX = f'_{PROFILE}' if PROFILE else ''
+PROFILE = normalize_profile(os.environ.get('JOB_PROFILE', ''))
+PROFILE_SUFFIX = profile_suffix(PROFILE)
+PROFILE_DISPLAY_NAME = profile_display_name(PROFILE)
 CONFIG_FILE = ensure_config_file(
-    os.path.join(BASE_DIR, f'config{PROFILE_SUFFIX}.yaml')
+    os.path.join(BASE_DIR, config_filename(PROFILE))
 )
 LOG_FILE = os.path.join(BASE_DIR, f'app{PROFILE_SUFFIX}.log')
 
@@ -501,7 +508,12 @@ def run_monitor():
 def index():
     """主页"""
     config = load_config()
-    return render_template('index.html', config=redact_config(config), status=monitor_status)
+    return render_template(
+        'index.html',
+        config=redact_config(config),
+        status=monitor_status,
+        profile_display_name=PROFILE_DISPLAY_NAME,
+    )
 
 
 @app.route('/api/config', methods=['GET'])
@@ -567,15 +579,19 @@ def update_github_sync_settings():
 
 @app.route('/api/github-sync/upload-config', methods=['POST'])
 def upload_config_to_github():
-    """Upload all local profiles to the repository configuration Secret."""
+    """Upload only the current user's private configuration Secret."""
     if not github_sync_lock.acquire(blocking=False):
         return jsonify({'success': False, 'message': '已有 GitHub 同步任务正在运行'}), 409
     try:
-        result = upload_local_configuration()
-        logger.info("本地配置已同步到 GitHub 仓库: %s", result['repository'])
+        result = upload_local_configuration(profile=PROFILE)
+        logger.info(
+            "%s 的本地配置已同步到 GitHub 仓库: %s",
+            PROFILE_DISPLAY_NAME,
+            result['repository'],
+        )
         return jsonify({
             'success': True,
-            'message': '本地配置已上传到 GitHub',
+            'message': f'{PROFILE_DISPLAY_NAME} 的本地配置已上传到 GitHub',
             'data': result,
         })
     except ValueError as e:
@@ -608,16 +624,17 @@ def download_jobs_from_github():
         return jsonify({'success': False, 'message': '已有 GitHub 同步任务正在运行'}), 409
 
     try:
-        result = download_latest_job_state()
+        result = download_latest_job_state(profile=PROFILE)
         total_jobs = sum(result.get('job_counts', {}).values())
         logger.info(
-            "已从 GitHub 同步职位数据: %s，共 %s 条",
+            "已从 GitHub 同步 %s 的职位数据: %s，共 %s 条",
+            PROFILE_DISPLAY_NAME,
             result['repository'],
             total_jobs,
         )
         return jsonify({
             'success': True,
-            'message': f'已从 GitHub 下载职位数据，共 {total_jobs} 条',
+            'message': f'已下载{PROFILE_DISPLAY_NAME}的职位数据，共 {total_jobs} 条',
             'data': result,
         })
     except ValueError as e:

@@ -838,7 +838,7 @@
             <div class="col-lg-4">
                 <div class="card" id="githubSyncCard">
                     <div class="card-header">
-                        <h5><i class="bi bi-github"></i> GitHub 同步</h5>
+                        <h5><i class="bi bi-github"></i> GitHub 同步（{{ profile_display_name }}）</h5>
                     </div>
                     <div class="card-body">
                         <div class="mb-3">
@@ -874,7 +874,8 @@
                             </button>
                         </div>
                         <div class="form-text mt-3" id="githubSyncStatus">
-                            下载前请先停止本地监测；覆盖前会自动备份现有数据库。
+                            仅同步当前{{ profile_display_name }}的云端配置和职位数据；下载前请先停止本地监测。
+                            覆盖前会自动备份现有数据库。
                         </div>
                     </div>
                 </div>

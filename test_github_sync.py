@@ -180,6 +180,70 @@ class GitHubSyncTests(unittest.TestCase):
                     base_dir=Path(directory),
                 )
 
+    def test_restore_rejects_another_users_state_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "source.db"
+            create_database(database, 1)
+            archive = create_state_archive(database)
+            with self.assertRaisesRegex(github_sync.GitHubSyncError, "不属于当前用户"):
+                github_sync.restore_job_state(
+                    archive,
+                    {"id": 1},
+                    base_dir=root,
+                    profile="user2",
+                )
+
+    def test_profile_upload_uses_its_own_secret(self):
+        class Client:
+            repository = "owner/repository"
+
+            def __init__(self):
+                self.name = ""
+
+            def update_repository_secret(self, name, value):
+                self.name = name
+                self.value = value
+                return "updated"
+
+        client = Client()
+        with patch.object(github_sync, "build_secret_value", return_value="encoded") as build:
+            result = github_sync.upload_local_configuration(client, profile="user2")
+
+        self.assertEqual(client.name, "JOB_MONITOR_USER2_CONFIG_B64")
+        build.assert_called_once_with(
+            include_sensitive_values=True,
+            config_names=["config_user2.yaml"],
+        )
+        self.assertEqual(result["profile"], "用户二")
+
+    def test_profile_download_uses_its_own_artifact_and_file_names(self):
+        class Client:
+            repository = "owner/repository"
+
+            def __init__(self):
+                self.artifact_name = ""
+
+            def latest_state_artifact(self, artifact_name):
+                self.artifact_name = artifact_name
+                return {"id": 7, "created_at": "2026-08-01T00:00:00Z"}
+
+            def download_artifact(self, artifact_id):
+                self.artifact_id = artifact_id
+                return b"archive"
+
+        client = Client()
+        with patch.object(github_sync, "restore_job_state", return_value={"job_counts": {}}) as restore:
+            result = github_sync.download_latest_job_state(client, profile="user2")
+
+        self.assertEqual(client.artifact_name, "job-monitor-state-user2")
+        restore.assert_called_once_with(
+            b"archive",
+            {"id": 7, "created_at": "2026-08-01T00:00:00Z"},
+            profile="user2",
+        )
+        self.assertEqual(result["artifact_name"], "job-monitor-state-user2")
+
     def test_web_routes_call_sync_services(self):
         client = web_app.app.test_client()
         with patch.object(
@@ -190,10 +254,11 @@ class GitHubSyncTests(unittest.TestCase):
                 "secret_name": "JOB_MONITOR_CONFIG_B64",
                 "result": "updated",
             },
-        ):
+        ) as upload:
             response = client.post("/api/github-sync/upload-config")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["success"])
+        upload.assert_called_once_with(profile=web_app.PROFILE)
 
         with patch.object(
             web_app,
@@ -203,13 +268,13 @@ class GitHubSyncTests(unittest.TestCase):
                 "job_counts": {"jobs.db": 4},
                 "backup_directory": "backup",
             },
-        ):
+        ) as download:
             web_app.is_monitoring = False
             response = client.post("/api/github-sync/download-jobs")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["data"]["job_counts"]["jobs.db"], 4)
+        download.assert_called_once_with(profile=web_app.PROFILE)
 
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -9,9 +9,10 @@ import logging
 import json
 
 import os
+from profile_config import normalize_profile, profile_suffix
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROFILE = os.environ.get('JOB_PROFILE', '')
-PROFILE_SUFFIX = f'_{PROFILE}' if PROFILE else ''
+PROFILE = normalize_profile(os.environ.get('JOB_PROFILE', ''))
+PROFILE_SUFFIX = profile_suffix(PROFILE)
 CACHE_FILE = os.path.join(BASE_DIR, f'jobs_cache{PROFILE_SUFFIX}.json')
 
 from database import db

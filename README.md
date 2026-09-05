@@ -30,7 +30,7 @@ GitHub 的 `Code → Download ZIP` 下载的是**源码**，不是已经封装�
 
 首次启动时，如果没有 `config.yaml`，程序会自动从不含个人信息的 `config.example.yaml` 创建一份。之后在网页中填写并保存配置即可；已有的本地配置不会被覆盖。
 
-### 日常启动与第二套独立配置
+### 日常启动与两套独立配置
 
 依赖安装完成后，只需双击 `启动Web服务-用户1(默认).bat`，无需重复安装。也可以在项目目录运行：
 
@@ -38,7 +38,14 @@ GitHub 的 `Code → Download ZIP` 下载的是**源码**，不是已经封装�
 python app.py
 ```
 
-第二套独立配置可以双击 `启动Web服务-用户2(分身).bat`，访问 `http://127.0.0.1:5001`。它使用独立的 `config_user2.yaml`、`jobs_user2.db`、缓存和日志。
+两套服务可同时打开，各自的网页、参数、职位数据和邮件通知均互不影响：
+
+| 用户 | 启动脚本 | 网页地址 | 配置与运行数据 |
+| --- | --- | --- | --- |
+| 用户一 | `启动Web服务-用户1(默认).bat` | `http://127.0.0.1:5000` | `config.yaml`、`jobs.db`、`jobs_cache.json`、`app.log` |
+| 用户二 | `启动Web服务-用户2(分身).bat` | `http://127.0.0.1:5001` | `config_user2.yaml`、`jobs_user2.db`、`jobs_cache_user2.json`、`app_user2.log` |
+
+请分别在两个网页中填写网站、关键词、城市、排除词、邮箱和 Gemini 设置。用户一的修改不会写入用户二的文件，反之亦然。
 
 ### 常见启动问题
 
@@ -63,8 +70,8 @@ python app.py
 | 职位浏览与筛选 | 折叠卡片、详情、分页、标题/描述搜索、网址标签筛选 | 爬取的职位信息 |
 | 邮件通知 | 发现符合条件的新职位时发送汇总邮件；可先发测试邮件 | 监测配置 → 邮箱配置 |
 | Gemini AI 筛选 | 通过自然语言要求进一步筛选规则命中的职位 | 监测配置 → Gemini API Key |
-| GitHub 云端同步 | 一键上传私有配置到 GitHub Secret，下载云端运行产生的职位数据 | GitHub 同步 |
-| 双配置分身 | 让两套网址、邮箱和职位数据互不影响地运行 | 用户1/用户2启动脚本 |
+| GitHub 云端同步 | 当前用户一键上传自己的私有配置到独立 GitHub Secret，并下载自己的云端职位数据 | GitHub 同步 |
+| 双配置分身 | 两套网址、关键词、邮箱、职位数据和云端 Action 均互不影响 | 用户1/用户2启动脚本 |
 
 ## 网页功能与使用方法
 
@@ -125,18 +132,18 @@ python app.py
 
 ### 6. 使用 Gemini AI 二次筛选（可选）
 
-若仅靠关键词、城市和排除词不够精确，可填写 Gemini API Key 和“AI 筛选要求”，例如“只保留公司战略、商业分析或 CEO 办公室方向的职位”。两个字段都填写时才会调用 AI；任一字段留空时只使用普通规则筛选。API Key 只写入本机 `config.yaml`，不会提交到 GitHub 仓库。
+若仅靠关键词、城市和排除词不够精确，可填写 Gemini API Key 和“AI 筛选要求”，例如“只保留公司战略、商业分析或 CEO 办公室方向的职位”。两个字段都填写时才会调用 AI；任一字段留空时只使用普通规则筛选。API Key 只写入当前用户的本机配置文件，不会提交到 GitHub 仓库。
 
-### 7. 使用用户2分身
+### 7. 同时使用用户一和用户二
 
-若要让两个人或两套求职条件相互隔离，启动 `启动Web服务-用户2(分身).bat`，访问 `http://127.0.0.1:5001`。它与默认用户分别使用：
+若要让两个人或两套求职条件相互隔离，请分别启动 `启动Web服务-用户1(默认).bat` 和 `启动Web服务-用户2(分身).bat`。两个网页可同时打开，端口分别为 5000 和 5001，并分别使用：
 
 - `config.yaml` / `config_user2.yaml`
 - `jobs.db` / `jobs_user2.db`
 - `jobs_cache.json` / `jobs_cache_user2.json`
 - `app.log` / `app_user2.log`
 
-两个分身可以同时运行；在同一台电脑上只需完成一次 Python 与 Playwright 的首次依赖安装。
+两个用户可以同时运行；在同一台电脑上只需完成一次 Python 与 Playwright 的首次依赖安装。每个网页里的“开始监测”“一键上传配置”“一键下载职位数据”都只影响当前用户。
 
 ## 已验证的关键词搜索站点
 
@@ -190,97 +197,66 @@ ai_filter_prompt: ''
 
 邮箱 465 端口使用 SSL，其他端口使用 STARTTLS。只有 `gemini_api_key` 和 `ai_filter_prompt` 都填写时才调用 Gemini。
 
-## GitHub 自动运行
+## GitHub 自动运行：用户一和用户二完全分开
 
-工作流位于 `.github/workflows/scraper_cron.yml`，默认在 UTC 13:00（新加坡/北京时间每周二、周五 21:00）运行，也支持在 Actions 页面手动运行。
+云端现在有两个独立工作流，默认均在 UTC 13:00（新加坡/北京时间每周二、周五 21:00）运行，也都可以在 GitHub Actions 页面分别手动运行：
 
-### 推荐：网页一键同步
+| 用户 | 工作流文件与名称 | 私有配置 Secret | 独立缓存与下载构件 |
+| --- | --- | --- | --- |
+| 用户一 | `.github/workflows/user1_monitor.yml` / `User 1 Job Monitor` | `JOB_MONITOR_USER1_CONFIG_B64` | `job-monitor-state-user1` |
+| 用户二 | `.github/workflows/user2_monitor.yml` / `User 2 Job Monitor` | `JOB_MONITOR_USER2_CONFIG_B64` | `job-monitor-state-user2` |
 
-在 GitHub 创建一个只允许访问目标仓库的 Fine-grained Personal Access Token，并授予：
+每条工作流只恢复并运行自己的配置，只读写自己的数据库与去重缓存；两个工作流可同时运行，互不取消、互不覆盖。旧的 `Daily Job Monitor`、旧 Secret `JOB_MONITOR_CONFIG_B64` 和旧构件不会再被新工作流使用。
 
-- Actions：只读，用于下载最新职位数据包
-- Secrets：读写，用于更新 `JOB_MONITOR_CONFIG_B64`
+### 推荐：分别在两个本地网页一键同步
 
-### 网页操作步骤
+先在 GitHub 创建一个仅限目标仓库的 Fine-grained Personal Access Token，并授予：
 
-1. 将本项目推送到自己的 GitHub 仓库，并在 GitHub 仓库的 Actions 页面启用 `Daily Job Monitor`。
-2. 创建只限该仓库的 Fine-grained Personal Access Token，并按上方要求授予权限。
-3. 重启本地 Web 服务，在网页右侧“GitHub 同步”中填写 `owner/repository`（或完整仓库网址）和 Token，点击“保存连接”。Token 仅保存在本机的 `github_sync.yaml`，网页重新显示时会掩码处理。
-4. 点击“一键上传配置”。程序会先保存当前网页配置，再把默认配置和所有用户分身配置加密写入 GitHub Actions Secret。
-5. 在 GitHub 的 Actions 页面手动运行一次 `Daily Job Monitor`，或等待下一个定时运行。成功后，云端职位数据包才能下载。
-6. 回到本地网页，先停止本地监测，再点击“一键下载职位数据”。程序会校验数据包、备份本地旧数据库和缓存，然后恢复云端数据。
+- Actions：只读，用于下载当前用户的最新职位数据包；
+- Secrets：读写，用于更新当前用户的配置 Secret。
 
-两个同步按钮的作用如下：
+然后按下面顺序做一次初始化：
 
-- 点击“一键上传配置”：先保存当前网页配置，再将 `config.yaml` 和全部 `config_user*.yaml` 加密上传到 GitHub Secret。邮箱授权码和 Gemini Key 也包含在这个加密 Secret 中。
-- 点击“一键下载职位数据”：下载最近一次成功 Actions 运行生成的数据包，校验后恢复到本地。覆盖前会在 `backups/github-sync-时间/` 备份现有数据库和缓存。
+1. 启动用户一和用户二的两个 BAT，分别打开 `http://127.0.0.1:5000` 与 `http://127.0.0.1:5001`。
+2. 分别填写各自的网站、关键词、邮箱和其他参数，点击“保存配置”。
+3. 在两个网页的“GitHub 同步”中填写同一个 `owner/repository` 和 Token，点击“保存连接”。Token 只保存在本机、被忽略的 `github_sync.yaml`，网页只显示掩码。
+4. 在用户一网页点击“一键上传配置”，只会上传 `config.yaml` 至 `JOB_MONITOR_USER1_CONFIG_B64`；在用户二网页点击同一按钮，只会上传 `config_user2.yaml` 至 `JOB_MONITOR_USER2_CONFIG_B64`。邮箱授权码和 Gemini Key 随各自的加密 Secret 上传。
+5. 打开 GitHub Actions，分别启用并手动运行一次 `User 1 Job Monitor` 与 `User 2 Job Monitor`，或等待下一个定时运行。
+6. 要同步云端数据回电脑时，停止对应网页的本地监测，再在该用户自己的网页点击“一键下载职位数据”。用户一只能下载 `job-monitor-state-user1`，用户二只能下载 `job-monitor-state-user2`；文件名不匹配会被程序拒绝，而不会覆盖另一人的数据。
 
-下载前必须停止本地监测。Token 只保存在已被 Git 忽略的本地 `github_sync.yaml` 中，接口只向浏览器返回掩码。该文件仍是明文敏感文件，只应保存在可信设备。
+下载前必须停止该用户的本地监测。覆盖前会在 `backups/github-sync-时间/` 备份该用户已有的数据库和缓存。
 
-GitHub Actions 至少需要成功运行一次，才能一键下载职位数据。职位数据包保留 30 天，每次成功运行都会生成新的数据包。
+### 手动创建两个配置 Secret（可选）
 
-### 手动生成私有配置 Secret
-
-先在本地网页中完成所有配置，然后运行：
-
-```powershell
-python github_config.py export
-```
-
-程序会把 `config.yaml` 和所有 `config_user*.yaml` 打包到：
-
-```text
-.job-monitor-config.b64
-```
-
-默认不会把邮箱授权码和 Gemini API Key 放进这个文件。
-
-进入 GitHub 仓库：
-
-```text
-Settings → Secrets and variables → Actions → New repository secret
-```
-
-新建以下 Secret：
-
-| Secret 名称 | 是否必需 | 内容 |
-| --- | --- | --- |
-| `JOB_MONITOR_CONFIG_B64` | 必需 | `.job-monitor-config.b64` 的完整单行内容 |
-| `JOB_EMAIL_AUTH_CODE` | 使用邮件时必需 | SMTP 邮箱授权码 |
-| `GEMINI_API_KEY` | 使用 Gemini 时必需 | Gemini API Key |
-
-如果不同分身必须使用不同的邮箱授权码或 API Key，可以运行：
+如果不使用网页上传，请先在本地完成两套配置，然后分别运行：
 
 ```powershell
-python github_config.py export --include-sensitive-values
+# 用户一
+python github_config.py export --config config.yaml --include-sensitive-values --output .job-monitor-config-user1.b64
+
+# 用户二
+python github_config.py export --config config_user2.yaml --include-sensitive-values --output .job-monitor-config-user2.b64
 ```
 
-此时敏感值也会被放入 `JOB_MONITOR_CONFIG_B64`。Base64 只是编码而不是加密，所以生成文件仍应视为敏感文件；它已被 Git 忽略，设置 Secret 后可以删除。若配置中的敏感字段为空，独立的邮箱或 Gemini Secret 会作为云端运行的后备值。
+进入 GitHub：`Settings → Secrets and variables → Actions → New repository secret`，新建：
 
-### 启用工作流
+| Secret 名称 | 内容 |
+| --- | --- |
+| `JOB_MONITOR_USER1_CONFIG_B64` | `.job-monitor-config-user1.b64` 的完整单行内容 |
+| `JOB_MONITOR_USER2_CONFIG_B64` | `.job-monitor-config-user2.b64` 的完整单行内容 |
 
-打开仓库的 Actions 页面，启用 `Daily Job Monitor`。Fork 不会继承上游仓库的 Secrets，Fork 用户必须设置自己的 Secrets 后才能运行。
+`--include-sensitive-values` 会把对应用户的邮箱授权码和 Gemini Key 一并放进该用户的 GitHub Secret。Base64 只是编码；导出文件本身仍是敏感文件，设置完成后应删除。若故意不包含敏感字段，可额外设置相互独立的可选 Secret：`JOB_MONITOR_USER1_EMAIL_AUTH_CODE` / `GEMINI_API_KEY_USER1`，以及 `JOB_MONITOR_USER2_EMAIL_AUTH_CODE` / `GEMINI_API_KEY_USER2`。
 
-每次运行时，工作流会：
+每个工作流的 Actions 缓存用于持久化去重状态，不是永久数据库；长期停用后缓存可能被 GitHub 清理，下一次运行会重新建立状态。工作流不会提交或推送配置、数据库、缓存或日志。Fork 不会继承上游仓库的 Secrets 和 Actions 缓存，Fork 用户需要自行设置两套 Secret。
 
-1. 在临时运行器中从 `JOB_MONITOR_CONFIG_B64` 恢复配置。
-2. 从该仓库自己的 Actions 缓存恢复数据库和去重缓存。
-3. 逐个运行默认配置和所有分身配置。
-4. 将更新后的数据库和去重缓存保存回 Actions 缓存。
-5. 上传一个可供本地“一键下载”的 `job-monitor-state` 数据包。
-
-工作流只有仓库内容读取权限，不会提交或推送配置、数据库、缓存或日志。Fork 的 Secrets 和 Actions 缓存均与上游仓库分离。
-
-Actions 缓存用于轻量级运行状态，不是永久数据库；每天运行会持续刷新缓存。如果仓库长期停用导致缓存被 GitHub 清理，下一次运行会重新建立去重状态。
-
-公开仓库的 Actions 数据包不应被当作私密存储。如果职位明细或监测方向需要保密，请使用私有 GitHub 仓库。
+构件包含职位数据库和去重缓存。公开仓库的 Actions 数据包不应被当作私密存储；如职位明细、网址标签或监测方向需要保密，请使用私有 GitHub 仓库。
 
 ## 首次上传 GitHub 前检查
 
 当前目录中的真实配置可能包含邮箱地址、授权码和 API Key。初始化 Git 仓库后，先确认这些文件确实被忽略：
 
 ```powershell
-git check-ignore config.yaml config_user2.yaml jobs.db jobs_cache.json app.log github_sync.yaml backups
+git check-ignore config.yaml config_user2.yaml jobs.db jobs_user2.db jobs_cache.json jobs_cache_user2.json app.log app_user2.log github_sync.yaml backups
 git status --short
 ```
 
@@ -298,7 +274,8 @@ python main.py --once
 # 持续监测
 python main.py
 
-# 使用指定分身
+# 使用用户二分身（必须同时指定 JOB_PROFILE，推荐直接双击用户二 BAT）
+$env:JOB_PROFILE = 'user2'
 python main.py --config config_user2.yaml --once
 
 # 所有本地分身各检查一次

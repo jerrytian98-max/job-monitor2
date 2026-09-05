@@ -23,10 +23,18 @@ import yaml
 
 from config_bootstrap import BASE_DIR
 from github_config import build_secret_value
+from profile_config import (
+    cloud_artifact_name,
+    cloud_config_secret_name,
+    config_filename,
+    profile_display_name,
+    state_filenames,
+)
 
 
 API_ROOT = "https://api.github.com"
 API_VERSION = "2022-11-28"
+# Compatibility defaults for callers that intentionally do not select a user.
 CONFIG_SECRET_NAME = "JOB_MONITOR_CONFIG_B64"
 ARTIFACT_NAME = "job-monitor-state"
 SETTINGS_FILE = BASE_DIR / "github_sync.yaml"
@@ -207,12 +215,12 @@ class GitHubClient:
         )
         return "created" if response.status_code == 201 else "updated"
 
-    def latest_state_artifact(self) -> dict:
+    def latest_state_artifact(self, artifact_name: str = ARTIFACT_NAME) -> dict:
         response = self._request(
             "GET",
             f"/repos/{self.repository}/actions/artifacts",
             "查询职位数据包",
-            params={"name": ARTIFACT_NAME, "per_page": 100},
+            params={"name": artifact_name, "per_page": 100},
         )
         try:
             artifacts = response.json().get("artifacts", [])
@@ -225,7 +233,8 @@ class GitHubClient:
         ]
         if not available:
             raise GitHubSyncError(
-                "没有找到可下载的职位数据。请先成功运行一次 Daily Job Monitor。"
+                f"没有找到可下载的 {artifact_name} 数据。"
+                "请先成功运行一次对应用户的 GitHub Actions。"
             )
         return max(
             available,
@@ -252,19 +261,33 @@ def client_from_settings(session: Optional[requests.Session] = None) -> GitHubCl
     return GitHubClient(settings["repository"], settings["token"], session=session)
 
 
-def upload_local_configuration(client: Optional[GitHubClient] = None) -> dict:
-    """Upload every local profile, including its credentials, as one secret."""
+def upload_local_configuration(
+    client: Optional[GitHubClient] = None,
+    *,
+    profile: str = "",
+) -> dict:
+    """Upload one local profile to its isolated GitHub Actions Secret."""
     github_client = client or client_from_settings()
-    secret_value = build_secret_value(include_sensitive_values=True)
-    result = github_client.update_repository_secret(CONFIG_SECRET_NAME, secret_value)
+    config_name = config_filename(profile)
+    secret_name = cloud_config_secret_name(profile)
+    secret_value = build_secret_value(
+        include_sensitive_values=True,
+        config_names=[config_name],
+    )
+    result = github_client.update_repository_secret(secret_name, secret_value)
     return {
         "repository": github_client.repository,
-        "secret_name": CONFIG_SECRET_NAME,
+        "profile": profile_display_name(profile),
+        "secret_name": secret_name,
         "result": result,
     }
 
 
-def _validated_state_files(archive_bytes: bytes, staging: Path) -> dict[str, bytes]:
+def _validated_state_files(
+    archive_bytes: bytes,
+    staging: Path,
+    allowed_names: Optional[set[str]] = None,
+) -> dict[str, bytes]:
     try:
         archive = zipfile.ZipFile(BytesIO(archive_bytes))
     except zipfile.BadZipFile as error:
@@ -282,6 +305,8 @@ def _validated_state_files(archive_bytes: bytes, staging: Path) -> dict[str, byt
             name = path.name
             if not (DB_NAME.fullmatch(name) or CACHE_NAME.fullmatch(name)):
                 raise GitHubSyncError(f"职位数据包包含不支持的文件: {name}")
+            if allowed_names is not None and name not in allowed_names:
+                raise GitHubSyncError("职位数据包不属于当前用户，已停止恢复")
             if name in files:
                 raise GitHubSyncError(f"职位数据包包含重复文件: {name}")
             total_uncompressed += info.file_size
@@ -352,11 +377,13 @@ def restore_job_state(
     archive_bytes: bytes,
     artifact: dict,
     base_dir: Path = BASE_DIR,
+    profile: Optional[str] = None,
 ) -> dict:
     """Validate, back up, and atomically restore downloaded databases/caches."""
+    allowed_names = set(state_filenames(profile)) if profile is not None else None
     with tempfile.TemporaryDirectory(prefix="job-monitor-github-sync-") as directory:
         staging = Path(directory)
-        files = _validated_state_files(archive_bytes, staging)
+        files = _validated_state_files(archive_bytes, staging, allowed_names)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         backup_dir = base_dir / "backups" / f"github-sync-{timestamp}"
@@ -402,11 +429,17 @@ def restore_job_state(
     }
 
 
-def download_latest_job_state(client: Optional[GitHubClient] = None) -> dict:
+def download_latest_job_state(
+    client: Optional[GitHubClient] = None,
+    *,
+    profile: str = "",
+) -> dict:
     github_client = client or client_from_settings()
-    artifact = github_client.latest_state_artifact()
+    artifact_name = cloud_artifact_name(profile)
+    artifact = github_client.latest_state_artifact(artifact_name)
     archive_bytes = github_client.download_artifact(int(artifact["id"]))
-    result = restore_job_state(archive_bytes, artifact)
+    result = restore_job_state(archive_bytes, artifact, profile=profile)
     result["repository"] = github_client.repository
+    result["profile"] = profile_display_name(profile)
+    result["artifact_name"] = artifact_name
     return result
-

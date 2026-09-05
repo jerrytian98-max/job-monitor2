@@ -10,10 +10,11 @@ import logging
 import os
 
 from job_identity import canonicalize_job_url, job_identity_hash
+from profile_config import normalize_profile, profile_suffix
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROFILE = os.environ.get('JOB_PROFILE', '')
-PROFILE_SUFFIX = f'_{PROFILE}' if PROFILE else ''
+PROFILE = normalize_profile(os.environ.get('JOB_PROFILE', ''))
+PROFILE_SUFFIX = profile_suffix(PROFILE)
 DB_FILE = os.path.join(BASE_DIR, f'jobs{PROFILE_SUFFIX}.db')
 
 
