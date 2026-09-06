@@ -88,6 +88,25 @@ python app.py
 
 添加、编辑或删除网址后，点击“保存配置”。点击“启动监测”时程序也会自动先保存一次当前网页内容。
 
+### 1.1 导出并交接招聘网站配置
+
+若要把目标招聘网站交给另一台电脑或另一个 Agent，运行：
+
+```powershell
+python site_config_transfer.py export
+```
+
+这会生成被 Git 忽略的 `job-monitor-site-config.yaml`。文件只包含每个用户的招聘网址、网址标签、抓取模式，以及作为参考的搜索关键词；**不包含**邮箱、授权码、Gemini Key、GitHub Token/设置、城市和排除词、数据库、缓存或已抓取职位。
+
+将该文件复制到另一台电脑的项目目录后，可由 Agent 或在 PowerShell 中执行：
+
+```powershell
+# 把文件中的用户一网站合并到目标电脑的用户二；关键词需要明确选择才会导入
+python site_config_transfer.py import --input job-monitor-site-config.yaml --source-profile user1 --target-profile user2 --include-keywords
+```
+
+导入默认只新增不存在的网址，并保留目标用户已有的网站标签、抓取模式和所有私有配置。若确认要用导出文件完全替换目标用户的网址列表，可额外加 `--replace`。导入后重启对应用户的 Web 服务即可看到更新。
+
 ### 2. 设置职位筛选条件
 
 “职位关键词”“城市”和“排除关键词”均以标签方式录入：输入内容后按 `Enter` 添加，点击标签上的删除按钮移除。

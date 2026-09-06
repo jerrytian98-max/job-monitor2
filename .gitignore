@@ -26,5 +26,8 @@ backups/
 # Generated GitHub Secret payload
 .job-monitor-config*.b64
 
+# Portable recruitment-site configuration exports (may reveal monitoring focus)
+job-monitor-site-config*.yaml
+
 # Atomic-write leftovers
 config*.tmp
