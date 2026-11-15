@@ -1,0 +1,24 @@
+[Unit]
+Description=Job Monitor multi-user web portal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/job-monitor
+Environment=JOB_MONITOR_CLOUD_DATA_DIR=/home/ubuntu/job-monitor-data
+Environment=JOB_MONITOR_HTTPS=1
+Environment=TZ=Asia/Shanghai
+ExecStart=/home/ubuntu/job-monitor/.venv/bin/gunicorn --workers 1 --threads 20 --worker-class gthread --bind 127.0.0.1:8000 --timeout 120 cloud_portal:app
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/job-monitor-data
+PrivateTmp=true
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10
+
+[Install]
+WantedBy=multi-user.target

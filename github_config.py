@@ -90,6 +90,8 @@ def _config_paths(config_names: Optional[Iterable[str]] = None) -> list[Path]:
 def _without_api_credentials(config: dict) -> dict:
     clean = copy.deepcopy(config)
     clean["gemini_api_key"] = ""
+    clean["openai_api_key"] = ""
+    clean["deepseek_api_key"] = ""
     email = clean.get("email")
     if isinstance(email, dict):
         email["auth_code"] = ""

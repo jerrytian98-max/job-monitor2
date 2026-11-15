@@ -29,12 +29,30 @@ def sample_config(secret_value=""):
             "smtp_port": 465,
         },
         "gemini_api_key": secret_value,
+        "openai_api_key": secret_value,
+        "deepseek_api_key": secret_value,
         "gemini_model": "gemini-3.5-flash-lite",
         "ai_filter_prompt": "",
     }
 
 
 class ConfigPrivacyTests(unittest.TestCase):
+    def test_committed_default_sites_are_complete_and_contain_no_credentials(self):
+        template_path = Path(__file__).resolve().parent / "config.example.yaml"
+        value = yaml.safe_load(template_path.read_text(encoding="utf-8"))
+
+        sites = value["job_sites"]
+        self.assertEqual(len(sites), 22)
+        self.assertEqual(set(value["job_site_labels"]), set(sites))
+        self.assertEqual(set(value["job_site_modes"]), set(sites))
+        self.assertTrue(all(mode in {"search", "fixed"} for mode in value["job_site_modes"].values()))
+        self.assertEqual(value["email"]["sender"], "")
+        self.assertEqual(value["email"]["auth_code"], "")
+        self.assertEqual(value["email"]["receiver"], "")
+        self.assertEqual(value["gemini_api_key"], "")
+        self.assertEqual(value["openai_api_key"], "")
+        self.assertEqual(value["deepseek_api_key"], "")
+
     def test_missing_local_config_is_created_from_safe_template(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -80,6 +98,8 @@ class ConfigPrivacyTests(unittest.TestCase):
             for config in payload["configs"].values():
                 self.assertEqual(config["email"]["auth_code"], "")
                 self.assertEqual(config["gemini_api_key"], "")
+            self.assertEqual(config["openai_api_key"], "")
+            self.assertEqual(config["deepseek_api_key"], "")
 
             with tempfile.TemporaryDirectory() as target_directory:
                 target = Path(target_directory)
@@ -152,11 +172,15 @@ class ConfigPrivacyTests(unittest.TestCase):
                 {
                     "JOB_EMAIL_AUTH_CODE": "environment-email",
                     "GEMINI_API_KEY": "environment-gemini",
+                    "OPENAI_API_KEY": "environment-openai",
+                    "DEEPSEEK_API_KEY": "environment-deepseek",
                 },
             ):
                 loaded = monitor._load_config(str(config_path))
             self.assertEqual(loaded["email"]["auth_code"], "profile-secret")
             self.assertEqual(loaded["gemini_api_key"], "profile-secret")
+            self.assertEqual(loaded["openai_api_key"], "profile-secret")
+            self.assertEqual(loaded["deepseek_api_key"], "profile-secret")
 
             blank = sample_config("")
             config_path.write_text(
@@ -168,11 +192,15 @@ class ConfigPrivacyTests(unittest.TestCase):
                 {
                     "JOB_EMAIL_AUTH_CODE": "environment-email",
                     "GEMINI_API_KEY": "environment-gemini",
+                    "OPENAI_API_KEY": "environment-openai",
+                    "DEEPSEEK_API_KEY": "environment-deepseek",
                 },
             ):
                 loaded = monitor._load_config(str(config_path))
             self.assertEqual(loaded["email"]["auth_code"], "environment-email")
             self.assertEqual(loaded["gemini_api_key"], "environment-gemini")
+            self.assertEqual(loaded["openai_api_key"], "environment-openai")
+            self.assertEqual(loaded["deepseek_api_key"], "environment-deepseek")
 
 
 if __name__ == "__main__":

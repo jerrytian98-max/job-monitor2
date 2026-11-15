@@ -4,13 +4,16 @@
 """
 
 from ai_filter import filter_jobs_with_ai
+from web_config import AI_PROVIDER_FIELDS
 from typing import List, Dict
 import logging
 import json
+import hashlib
+import unicodedata
 
 import os
 from profile_config import normalize_profile, profile_suffix
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.environ.get('JOB_MONITOR_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
 PROFILE = normalize_profile(os.environ.get('JOB_PROFILE', ''))
 PROFILE_SUFFIX = profile_suffix(PROFILE)
 CACHE_FILE = os.path.join(BASE_DIR, f'jobs_cache{PROFILE_SUFFIX}.json')
@@ -108,6 +111,88 @@ class JobMatcher:
         }
         return True
     
+    @staticmethod
+    def _normalized_text(value) -> str:
+        """Normalize scraped and configured text for reliable matching."""
+        if value is None:
+            return ''
+        if isinstance(value, set):
+            value = sorted(value, key=str)
+        if isinstance(value, (dict, list, tuple)):
+            value = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        return unicodedata.normalize('NFKC', str(value)).strip().casefold()
+
+    def _matches_city_constraint(self, job: Dict) -> bool:
+        """Apply configured cities when a job exposes a meaningful location."""
+        configured = [
+            self._normalized_text(city)
+            for city in self.config.get('cities', [])
+            if self._normalized_text(city)
+        ]
+        if not configured:
+            return True
+
+        job_city = self._normalized_text(job.get('city'))
+        unrestricted_locations = {
+            '', '未知', '不限', '地点不限', '全国', '远程', 'remote',
+        }
+        if job_city in unrestricted_locations:
+            # Some sites do not expose a city field or offer no city filter.
+            # Do not discard an otherwise valid job merely for missing data.
+            return True
+
+        return any(
+            city in job_city or job_city in city
+            for city in configured
+        )
+
+    def _contains_excluded_keyword(self, job: Dict) -> bool:
+        """Search every user-facing scraped field after the crawl completes."""
+        keywords = [
+            self._normalized_text(keyword)
+            for keyword in self.config.get('exclude_keywords', [])
+            if self._normalized_text(keyword)
+        ]
+        if not keywords:
+            return False
+
+        searchable_values = []
+        for field, value in job.items():
+            # Internal control fields and raw URLs are not job content. A URL
+            # path such as /intern/ must not exclude an otherwise unrelated job.
+            if str(field).startswith('_') or field == 'url':
+                continue
+            normalized = self._normalized_text(value)
+            if normalized:
+                searchable_values.append(normalized)
+        searchable_text = '\n'.join(searchable_values)
+        return any(keyword in searchable_text for keyword in keywords)
+
+    def _matches_required_keywords(self, job: Dict) -> bool:
+        """Apply the ordinary keyword rule after hard constraints."""
+        if job.get('_fixed_url_mode'):
+            return True
+
+        job_keywords = self.config.get('job_keywords', [])
+        if not job_keywords:
+            return True
+
+        title = self._normalized_text(job.get('title'))
+        description = self._normalized_text(job.get('description'))
+        return any(
+            self._normalized_text(keyword) in title
+            or self._normalized_text(keyword) in description
+            for keyword in job_keywords
+            if self._normalized_text(keyword)
+        )
+
+    def matches_hard_constraints(self, job: Dict) -> bool:
+        """Rules that must hold with or without the optional AI filter."""
+        return (
+            self._matches_city_constraint(job)
+            and not self._contains_excluded_keyword(job)
+        )
+
     def match_job(self, job: Dict) -> bool:
         """
         判断职位是否匹配配置条件
@@ -120,38 +205,13 @@ class JobMatcher:
         """
         # 移除了目标公司过滤逻辑，因为现在通过目标网址抓取，抓取到的即视为该公司的职位
         
-        # 检查城市
-        cities = self.config.get('cities', [])
-        if cities and job.get('city', '') not in cities and job.get('city', '') != '未知':
+        if not self.matches_hard_constraints(job):
             return False
-        
-        # 检查排除关键词
-        exclude_keywords = self.config.get('exclude_keywords', [])
-        title = job.get('title', '')
-        description = job.get('description', '')
-        
-        for keyword in exclude_keywords:
-            if keyword in title or keyword in description:
-                return False
-        
-        # 检查职位关键词
-        job_keywords = self.config.get('job_keywords', [])
-        if job.get('_fixed_url_mode'):
-            # Fixed-URL rows use the URL's own filters as the source of truth.
-            # City and exclusion rules above still apply.
-            return True
-        if not job_keywords:
-            return True # 如果没有配置关键词，默认全部匹配
-            
-        for keyword in job_keywords:
-            if keyword.lower() in title.lower() or keyword.lower() in description.lower():
-                return True
-        
-        return False
+        return self._matches_required_keywords(job)
     
     def filter_jobs(self, jobs: List[Dict]) -> List[Dict]:
         """
-        过滤职位，返回符合条件的新职位
+        先识别本轮新职位，再让 AI 判断，最后只保存通过的职位。
         
         Args:
             jobs: 职位列表
@@ -159,30 +219,67 @@ class JobMatcher:
         Returns:
             符合条件的新职位列表
         """
+        provider = self.config.get('ai_provider') or 'gemini'
+        key_field, model_field, default_model = AI_PROVIDER_FIELDS.get(provider, AI_PROVIDER_FIELDS['gemini'])
+        ai_key = self.config.get(key_field, '')
+        ai_prompt = self.config.get('ai_filter_prompt', '')
+        use_ai = self.config.get('ai_filter_enabled', bool(ai_key and ai_prompt))
+        policy = hashlib.sha256(json.dumps(
+            [provider, self.config.get(model_field, default_model), ai_prompt],
+            ensure_ascii=False,
+        ).encode('utf-8')).hexdigest() if use_ai else None
+
         candidates = []
+        pending_notification = []
+        seen_job_ids = set()
         for job in jobs:
             try:
-                if self.match_job(job):
-                    candidates.append(job)
-            except Exception as e:
-                logger.error(f"过滤职位时出错: {e}")
-
-        # 只有同时配置 Key 和筛选要求时才调用 AI；失败时自动退回规则结果。
-        candidates = filter_jobs_with_ai(
-            candidates,
-            self.config.get('gemini_api_key', ''),
-            self.config.get('ai_filter_prompt', ''),
-            self.config.get('gemini_model', 'gemini-3.5-flash-lite')
-        )
-
-        matched_jobs = []
-        seen_job_ids = set()
-        for job in candidates:
-            try:
+                if not isinstance(job, dict):
+                    continue
                 job_id = self._generate_job_id(job)
                 if job_id in seen_job_ids:
                     continue
                 seen_job_ids.add(job_id)
+                # City and exclusion rules are deterministic user constraints.
+                # They always run before database writes and before the optional
+                # AI filter. AI only replaces the ordinary positive-keyword
+                # matching step.
+                if not self.matches_hard_constraints(job):
+                    continue
+                if not use_ai and not self._matches_required_keywords(job):
+                    continue
+                if self.persist:
+                    state = self.database.get_job_state(job)
+                    if state:
+                        if not state.get('is_notified'):
+                            pending_notification.append(job)
+                        continue
+                    cached = self.known_jobs.get(job_id, {})
+                    if cached.get('found_time') or (use_ai and cached.get('ai_rejected_policy') == policy):
+                        continue
+                candidates.append(job)
+            except Exception as e:
+                logger.error(f"过滤职位时出错: {e}")
+
+        if use_ai and candidates:
+            selected = filter_jobs_with_ai(
+                candidates,
+                ai_key,
+                ai_prompt,
+                self.config.get(model_field, default_model),
+                provider=provider,
+            )
+            if self.persist:
+                selected_ids = {self._generate_job_id(job) for job in selected}
+                for job in candidates:
+                    job_id = self._generate_job_id(job)
+                    if job_id not in selected_ids:
+                        self.known_jobs[job_id] = {'ai_rejected_policy': policy}
+            candidates = selected
+
+        matched_jobs = []
+        for job in pending_notification + candidates:
+            try:
                 if self.is_new_job(job):
                     matched_jobs.append(job)
                     logger.info(

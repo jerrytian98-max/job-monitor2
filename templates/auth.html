@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ '注册' if mode == 'register' else '登录' }} · 招聘监测系统</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 20px; font-family: system-ui, sans-serif; background: #f4f6fb; color: #172033; }
+    main { width: min(1040px, 100%); display: grid; grid-template-columns: minmax(0, 1fr) 420px; align-items: center; gap: 64px; }
+    .auth-panel { min-width: 0; background: white; border: 1px solid #e6e9f0; border-radius: 16px; padding: 32px; box-shadow: 0 15px 45px #17203315; }
+    .product-intro { padding-left: 28px; border-left: 3px solid #a3bba6; }
+    .product-intro h2 { margin: 0 0 18px; font-size: 32px; letter-spacing: -.03em; }
+    .product-intro p, .product-intro li { font-size: 15px; line-height: 1.9; }
+    .product-intro ul { margin: 22px 0; padding-left: 20px; color: #627086; }
+    .product-intro li + li { margin-top: 18px; }
+    .product-intro li::marker { color: #456c50; }
+    .product-intro .product-wish { margin: 26px 0 0; color: #456c50; font-weight: 600; }
+    h1 { font-size: 24px; margin: 0 0 10px; }
+    p { color: #627086; line-height: 1.6; }
+    label { display: block; margin: 18px 0 6px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #cbd3df; border-radius: 9px; font-size: 16px; }
+    button { width: 100%; border: 0; border-radius: 9px; background: #5267d9; color: white; font-weight: 700; padding: 13px; margin-top: 24px; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .error { color: #9e2c36; background: #fff0f1; padding: 12px; border-radius: 8px; }
+    .notice { color: #216341; background: #eaf7ef; padding: 12px; border-radius: 8px; }
+    a { color: #4055bf; }
+    @media (max-width: 800px) {
+      main { max-width: 480px; grid-template-columns: minmax(0, 1fr); gap: 32px; }
+      .auth-panel { grid-row: 1; padding: 24px; }
+      .product-intro { grid-row: 2; padding-left: 20px; }
+      .product-intro h2 { font-size: 26px; }
+      .product-intro p, .product-intro li { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="product-intro" aria-labelledby="productTitle">
+      <h2 id="productTitle">Job Monitor</h2>
+      <p>「Job Monitor」是一款面向求职者的智能岗位追踪工具。</p>
+      <ul>
+        <li>监控多家公司的招聘官网（已内置腾讯、字节、小红书等 17+ 招聘官网），支持关键词搜索与固定网址直抓，还可接入大模型API做 AI 二次研判，只保留真正匹配的岗位。</li>
+        <li>发现新职位后可自动汇总成一封 HTML 邮件推送到您邮箱，支持每周定时运行。</li>
+      </ul>
+      <p class="product-wish">祝您早日觅得合适的岗位！</p>
+    </section>
+    <section class="auth-panel" aria-labelledby="authTitle">
+    <h1 id="authTitle">招聘监测系统</h1>
+    <p>{{ '使用邮箱注册。收到验证码并验证后，即可配置自己的招聘网站与关键词。' if mode == 'register' else '登录后查看职位并管理自己的云端监测。' }}</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    {% if mode == 'register' %}<p id="codeStatus" role="status" hidden></p>{% endif %}
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="email">邮箱</label>
+      <input id="email" name="email" type="{{ 'email' if mode == 'register' else 'text' }}" autocomplete="username" maxlength="254" value="{{ email }}" required>
+      {% if mode == 'register' %}
+        <button id="sendCode" type="button">发送验证码</button>
+        <label for="code">邮箱验证码</label>
+        <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="one-time-code" required>
+      {% endif %}
+      <label for="password">密码</label>
+      <input id="password" name="password" type="password" autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}" required>
+      <button type="submit">{{ '验证并注册' if mode == 'register' else '登录' }}</button>
+    </form>
+    <p>{% if mode == 'register' %}已有账号？<a href="{{ url_for('login') }}">登录</a>{% else %}还没有账号？<a href="{{ url_for('register') }}">注册</a>{% endif %}</p>
+    {% if mode == 'login' %}<p style="font-size: 13px;">旧账号可继续使用原用户名登录，登录后可验证并绑定邮箱。</p>{% endif %}
+    {% if mode == 'register' %}<p style="font-size: 13px;">邮箱用于注册身份验证，并默认用作职位提醒的接收地址；你登录后可修改接收地址。若暂时无法获取验证码，请稍后重试或联系管理员。</p>{% endif %}
+    </section>
+  </main>
+  {% if mode == 'register' %}
+  <script>
+    document.getElementById('sendCode').addEventListener('click', async function () {
+      const email = document.getElementById('email');
+      const status = document.getElementById('codeStatus');
+      if (!email.reportValidity()) return;
+      this.disabled = true;
+      status.hidden = false;
+      status.className = '';
+      status.textContent = '正在发送…';
+      try {
+        const data = new FormData();
+        data.append('csrf_token', '{{ csrf_token }}');
+        data.append('email', email.value);
+        const response = await fetch('{{ url_for('register_code') }}', {method: 'POST', body: data});
+        const result = await response.json();
+        status.className = result.success ? 'notice' : 'error';
+        status.textContent = result.message;
+      } catch (_) {
+        status.className = 'error';
+        status.textContent = '发送失败，请检查网络后重试';
+      } finally {
+        this.disabled = false;
+      }
+    });
+  </script>
+  {% endif %}
+</body>
+</html>

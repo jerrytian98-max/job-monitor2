@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>验证并绑定邮箱 · 招聘监测系统</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: system-ui, sans-serif; background: #f4f6fb; color: #172033; }
+    main { width: min(420px, calc(100vw - 40px)); background: white; border: 1px solid #e6e9f0; border-radius: 16px; padding: 32px; }
+    p { color: #627086; line-height: 1.6; }
+    label { display: block; margin: 18px 0 6px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #cbd3df; border-radius: 9px; font-size: 16px; }
+    button { width: 100%; border: 0; border-radius: 9px; background: #5267d9; color: white; font-weight: 700; padding: 13px; margin-top: 20px; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .error { color: #9e2c36; background: #fff0f1; padding: 12px; border-radius: 8px; }
+    .notice { color: #216341; background: #eaf7ef; padding: 12px; border-radius: 8px; }
+    a { color: #4055bf; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>验证并绑定邮箱</h1>
+    <p>旧账号仍可用原用户名登录。绑定并验证邮箱后，该邮箱会成为默认的职位提醒接收地址；已有接收地址不会被覆盖。</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <p id="codeStatus" role="status" hidden></p>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="email">邮箱</label>
+      <input id="email" name="email" type="email" autocomplete="email" maxlength="254" value="{{ email }}" required>
+      <button id="sendCode" type="button">发送验证码</button>
+      <label for="code">邮箱验证码</label>
+      <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="one-time-code" required>
+      <button type="submit">验证并绑定</button>
+    </form>
+    <p><a href="{{ url_for('index') }}">暂不绑定，返回监测页面</a></p>
+  </main>
+  <script>
+    document.getElementById('sendCode').addEventListener('click', async function () {
+      const email = document.getElementById('email');
+      const status = document.getElementById('codeStatus');
+      if (!email.reportValidity()) return;
+      this.disabled = true;
+      status.hidden = false;
+      status.className = '';
+      status.textContent = '正在发送…';
+      try {
+        const data = new FormData();
+        data.append('csrf_token', '{{ csrf_token }}');
+        data.append('email', email.value);
+        const response = await fetch('{{ url_for('bind_email_code') }}', {method: 'POST', body: data});
+        const result = await response.json();
+        status.className = result.success ? 'notice' : 'error';
+        status.textContent = result.message;
+      } catch (_) {
+        status.className = 'error';
+        status.textContent = '发送失败，请检查网络后重试';
+      } finally {
+        this.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

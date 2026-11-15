@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>管理员后台 · 招聘监测系统</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #172033; background: #f4f6fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #1f2a44; color: white; padding: 16px max(24px, calc((100vw - 1180px)/2)); display: flex; justify-content: space-between; align-items: center; gap: 18px; }
+    header a, header button { color: white; }
+    header nav { display: flex; gap: 18px; align-items: center; }
+    header button { background: none; border: 0; text-decoration: underline; cursor: pointer; font: inherit; }
+    a { color: #4055bf; }
+    .shell { max-width: 1228px; margin: 28px auto; padding: 0 24px; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; }
+    aside, main { background: white; border: 1px solid #e0e5ed; border-radius: 14px; padding: 24px; }
+    aside h2 { font-size: 15px; color: #69768a; margin: 0 0 14px; }
+    .tree { list-style: none; margin: 0; padding: 0; }
+    .tree li { margin: 3px 0; }
+    .tree a { display: block; padding: 10px 12px; text-decoration: none; border-radius: 8px; word-break: break-all; }
+    .tree a:hover, .tree a.active { background: #edf0ff; }
+    .tree .child { margin-left: 14px; border-left: 1px solid #d9e0ee; padding-left: 12px; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    h2 { font-size: 19px; margin-top: 30px; }
+    p { color: #617087; line-height: 1.55; }
+    .card { border: 1px solid #e4e8ef; border-radius: 10px; padding: 18px; margin-top: 20px; }
+    .stats { display: flex; gap: 24px; flex-wrap: wrap; }
+    .stats strong { font-size: 20px; display: block; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { padding: 13px 12px; text-align: left; border-bottom: 1px solid #e4e8ef; vertical-align: top; }
+    th { color: #68778c; font-size: 13px; }
+    code.password { display: inline-block; padding: 5px 8px; background: #f1f3f8; border-radius: 6px; color: #172033; overflow-wrap: anywhere; }
+    .unavailable { color: #9a5a21; font-size: 13px; }
+    label { display: block; font-weight: 600; margin: 16px 0 6px; }
+    input { width: 100%; max-width: 520px; padding: 11px; border: 1px solid #cbd3df; border-radius: 8px; font: inherit; }
+    button.primary { background: #5267d9; color: white; border: 0; border-radius: 8px; padding: 12px 18px; margin-top: 22px; cursor: pointer; font: inherit; }
+    .danger-zone { border-color: #efc6cb; }
+    .danger-zone h2 { color: #9e2c36; margin-top: 0; }
+    button.danger, button.secondary { border: 1px solid #cf4552; border-radius: 8px; padding: 11px 16px; margin-top: 18px; cursor: pointer; font: inherit; }
+    button.danger { background: #bd3543; color: white; }
+    button.secondary { background: white; color: #4055bf; border-color: #cbd3df; }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f5f7fb; padding: 18px; border-radius: 9px; line-height: 1.5; }
+    .notice { padding: 12px 14px; border-radius: 8px; background: #eaf7ef; color: #216341; }
+    .error { padding: 12px 14px; border-radius: 8px; background: #fff0f1; color: #9e2c36; }
+    .crumb { color: #68778c; font-size: 14px; margin-bottom: 18px; }
+    .feedback-meta { display: flex; gap: 12px; flex-wrap: wrap; color: #617087; font-size: 13px; }
+    .feedback-meta strong { color: #172033; overflow-wrap: anywhere; }
+    .feedback-text { white-space: pre-wrap; overflow-wrap: anywhere; color: #172033; }
+    .feedback-images { display: flex; gap: 12px; flex-wrap: wrap; }
+    .feedback-images img { display: block; width: 160px; height: 120px; object-fit: contain; border: 1px solid #e0e5ed; border-radius: 8px; background: #f5f7fb; }
+    .feedback-pagination { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 24px; }
+    @media (max-width: 760px) { .shell { grid-template-columns: 1fr; } header { padding: 16px 24px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>招聘监测 · 管理员后台</strong>
+    <nav>
+      <a href="{{ url_for('index') }}">返回我的监测</a>
+      <span>{{ current_username }}</span>
+      <form action="{{ url_for('logout') }}" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">退出</button>
+      </form>
+    </nav>
+  </header>
+  <div class="shell">
+    <aside>
+      <h2>管理目录</h2>
+      <ul class="tree">
+        <li><a href="{{ url_for('admin_home') }}" class="{{ 'active' if not selected and not show_passwords and not show_feedback else '' }}">发信邮箱设置</a></li>
+        <li><a href="{{ url_for('admin_passwords') }}" class="{{ 'active' if show_passwords else '' }}">用户密码</a></li>
+        <li><a href="{{ url_for('admin_feedback') }}" class="{{ 'active' if show_feedback else '' }}">用户反馈</a></li>
+        <li style="padding: 16px 12px 6px; color: #68778c;">用户（{{ users|length }}）</li>
+        {% for item in users %}
+          <li class="child"><a href="{{ url_for('admin_user_config', user_id=item.id) }}" class="{{ 'active' if selected and selected.id == item.id else '' }}">{{ item.username }} / config.yaml</a></li>
+        {% endfor %}
+      </ul>
+    </aside>
+    <main>
+      {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
+      {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+      {% if show_feedback %}
+        <div class="crumb">管理 / 用户反馈</div>
+        <h1>用户反馈</h1>
+        <p>共 {{ feedback_total }} 条反馈，按提交时间倒序排列。时间为北京时间，点击截图可查看原图。</p>
+        {% for item in feedback_items %}
+          <article class="card">
+            <div class="feedback-meta"><strong>{{ item.username }}</strong><time>{{ item.submitted_at }}</time><span>编号 {{ item.id }}</span></div>
+            <p class="feedback-text">{{ item.content }}</p>
+            {% if item.images %}<div class="feedback-images">
+              {% for image_id in item.images %}<a href="{{ url_for('feedback_image', image_id=image_id) }}" target="_blank" rel="noopener"><img src="{{ url_for('feedback_image', image_id=image_id) }}" alt="反馈 {{ item.id }} 的截图 {{ loop.index }}" loading="lazy"></a>{% endfor %}
+            </div>{% endif %}
+          </article>
+        {% else %}<p>暂无反馈。</p>{% endfor %}
+        {% if feedback_pages > 1 %}<nav class="feedback-pagination" aria-label="反馈分页">
+          {% if feedback_page > 1 %}<a href="{{ url_for('admin_feedback', page=feedback_page-1) }}">上一页</a>{% endif %}
+          <span>第 {{ feedback_page }} / {{ feedback_pages }} 页</span>
+          {% if feedback_page < feedback_pages %}<a href="{{ url_for('admin_feedback', page=feedback_page+1) }}">下一页</a>{% endif %}
+        </nav>{% endif %}
+      {% elif show_passwords %}
+        <div class="crumb">管理 / 用户密码</div>
+        <h1>用户密码</h1>
+        <p>以下密码由服务器加密保存，仅管理员可在此解密查看。每次查看都会写入管理审计表，页面不会被浏览器或代理缓存。</p>
+        <table>
+          <thead><tr><th>账号 ID</th><th>用户</th><th>密码（明文）</th><th>角色</th></tr></thead>
+          <tbody>
+            {% for item in users %}
+              <tr>
+                <td>{{ item.id }}</td>
+                <td>{{ item.username }}</td>
+                <td>
+                  {% if item.password_plaintext is not none %}
+                    <code class="password">{{ item.password_plaintext }}</code>
+                  {% else %}
+                    <span class="unavailable">暂不可用；该用户下次成功登录后自动补录</span>
+                  {% endif %}
+                </td>
+                <td>{{ '管理员' if item.is_admin else '普通用户' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% elif selected %}
+        <div class="crumb">用户 / {{ selected.username }} / config.yaml</div>
+        <h1>{{ selected.username }} 的配置</h1>
+        <div class="card stats">
+          <div>账号 ID<strong>{{ selected.id }}</strong></div>
+          <div>注册时间（UTC）<strong style="font-size: 16px;">{{ selected.created_at }}</strong></div>
+          <div>角色<strong style="font-size: 16px;">{{ '管理员' if selected.is_admin else '普通用户' }}</strong></div>
+          <div>邮箱<strong style="font-size: 16px;">{{ selected.email or '未绑定' }}</strong></div>
+          <div>邮箱状态<strong style="font-size: 16px;">{{ '已验证' if selected.email_verified else '未验证（旧账号）' }}</strong></div>
+        </div>
+        <h2>config.yaml</h2>
+        <p>仅供查看；邮箱授权码、API Key、密码哈希及未知敏感字段不会显示。用户密码请在“用户密码”页面查看。查看操作会记录在管理审计表中。</p>
+        <pre>{{ config_text }}</pre>
+        <section class="card danger-zone" aria-labelledby="deleteUserTitle">
+          <h2 id="deleteUserTitle">删除用户</h2>
+          {% if selected.id == current_user_id %}
+            <p>当前登录的管理员账号不能删除。</p>
+          {% else %}
+            <p>将删除该用户的账号、密码、配置、职位、抓取任务和日志。该用户将无法继续登录，操作无法撤销。</p>
+            {% if selected_active_status %}
+              <p role="status">该用户{{ '的抓取任务正在停止' if selected_active_status == 'cancel_requested' else '正在抓取职位' }}，任务结束后才能删除。请停止后刷新本页。</p>
+              <form action="{{ url_for('admin_stop_user', user_id=selected.id) }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="secondary" {{ 'disabled' if selected_active_status == 'cancel_requested' else '' }}>暂停并停止该用户监测</button>
+              </form>
+            {% endif %}
+            <form action="{{ url_for('admin_delete_user', user_id=selected.id) }}" method="post" id="deleteUserForm">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <label for="deleteConfirmation">输入完整账号以确认：{{ selected.username }}</label>
+              <input id="deleteConfirmation" name="confirmation" required autocomplete="off" spellcheck="false" placeholder="输入上方账号">
+              <div><button type="submit" class="danger" {{ 'disabled' if selected_active_status else '' }}>永久删除该用户</button></div>
+            </form>
+          {% endif %}
+        </section>
+      {% else %}
+        <div class="crumb">管理 / 发信邮箱设置</div>
+        <h1>统一发信邮箱</h1>
+        <p>所有用户的职位提醒通过这里配置的邮箱发出。用户只能设置自己的接收邮箱，无法读取发信授权码。</p>
+        <form action="{{ url_for('admin_save_email') }}" method="post" class="card">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label for="sender">发件邮箱</label>
+          <input id="sender" name="sender" type="email" value="{{ admin_email.sender }}" required autocomplete="off">
+          <label for="auth_code">邮箱授权码</label>
+          <input id="auth_code" name="auth_code" type="password" value="{{ admin_email.auth_code }}" required autocomplete="new-password">
+          <p>已保存的授权码只显示掩码；不修改时保留原值。</p>
+          <label for="smtp_server">SMTP 服务器</label>
+          <input id="smtp_server" name="smtp_server" value="{{ admin_email.smtp_server }}" placeholder="smtp.example.com" required>
+          <label for="smtp_port">SMTP 端口</label>
+          <input id="smtp_port" name="smtp_port" type="number" min="1" max="65535" value="{{ admin_email.smtp_port }}" required>
+          <button type="submit" class="primary">保存发信配置</button>
+        </form>
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>

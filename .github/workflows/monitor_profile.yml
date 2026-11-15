@@ -1,0 +1,100 @@
+name: Shared profile monitoring
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        required: true
+        type: string
+    secrets:
+      config_b64:
+        required: true
+      email_auth_code:
+        required: false
+      gemini_api_key:
+        required: false
+      openai_api_key:
+        required: false
+      deepseek_api_key:
+        required: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      JOB_PROFILE: ${{ inputs.profile }}
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Resolve isolated profile paths
+        id: profile
+        run: |
+          python - <<'PY'
+          import os
+          from profile_config import config_filename, state_filenames, cloud_artifact_name, cloud_cache_key_prefix
+          profile = os.environ['JOB_PROFILE']
+          if profile not in ('', 'user2'):
+              raise SystemExit('Unsupported workflow profile')
+          database, cache = state_filenames(profile)
+          values = dict(config=config_filename(profile), database=database, cache=cache,
+                        artifact=cloud_artifact_name(profile), cache_prefix=cloud_cache_key_prefix(profile) + '-')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+              for key, value in values.items():
+                  stream.write(f'{key}={value}\n')
+          PY
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Restore isolated job state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ steps.profile.outputs.database }}
+            ${{ steps.profile.outputs.cache }}
+          key: ${{ steps.profile.outputs.cache_prefix }}${{ github.run_id }}
+          restore-keys: ${{ steps.profile.outputs.cache_prefix }}
+
+      - name: Restore private configuration
+        env:
+          JOB_MONITOR_CONFIG_B64: ${{ secrets.config_b64 }}
+        run: python github_config.py restore --config "${{ steps.profile.outputs.config }}" --secret-env JOB_MONITOR_CONFIG_B64
+
+      - name: Run profile check
+        env:
+          JOB_EMAIL_AUTH_CODE: ${{ secrets.email_auth_code }}
+          GEMINI_API_KEY: ${{ secrets.gemini_api_key }}
+          OPENAI_API_KEY: ${{ secrets.openai_api_key }}
+          DEEPSEEK_API_KEY: ${{ secrets.deepseek_api_key }}
+        run: python main.py --config "${{ steps.profile.outputs.config }}" --once
+
+      - name: Save isolated job state
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.profile.outputs.database }}
+            ${{ steps.profile.outputs.cache }}
+          key: ${{ steps.profile.outputs.cache_prefix }}${{ github.run_id }}
+
+      - name: Publish isolated downloadable state
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.profile.outputs.artifact }}
+          path: |
+            ${{ steps.profile.outputs.database }}
+            ${{ steps.profile.outputs.cache }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6

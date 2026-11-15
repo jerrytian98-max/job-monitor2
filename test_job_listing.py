@@ -1,6 +1,7 @@
 """职位列表排序、网址标签与筛选的离线测试。"""
 
 import tempfile
+from contextlib import closing
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -121,7 +122,10 @@ class JobListingTests(unittest.TestCase):
     def test_legacy_combined_label_is_reduced_to_the_first_keyword(self):
         self.add_job('旧标签职位', '2026-03-10', '腾讯法律 / 腾讯法务')
 
-        # Database startup migration also normalizes previously saved cards.
+        # Simulate a pre-versioned database, rather than re-running a migration
+        # on a database that has already completed it.
+        with closing(self.db._get_connection()) as conn, conn:
+            conn.execute('PRAGMA user_version=0')
         self.db._init_db()
 
         self.assertEqual(
@@ -146,6 +150,22 @@ class JobListingTests(unittest.TestCase):
         self.assertTrue(payload['success'])
         self.assertEqual(payload['pagination']['total'], 1)
         self.assertEqual(payload['data'][0]['site_label'], '法务')
+
+    def test_jobs_api_returns_twenty_four_per_page(self):
+        for index in range(25):
+            self.add_job(f'测试职位{index}', '2026-03-10', '法务')
+
+        with (
+            patch.object(web_app, 'db', self.db),
+            patch.object(web_app, 'CONFIG_FILE', str(self.config_path)),
+        ):
+            first = web_app.app.test_client().get('/api/jobs').get_json()
+            second = web_app.app.test_client().get('/api/jobs?page=2').get_json()
+
+        self.assertEqual(first['pagination']['per_page'], 24)
+        self.assertEqual(first['pagination']['total_pages'], 2)
+        self.assertEqual(len(first['data']), 24)
+        self.assertEqual(len(second['data']), 1)
 
 
 if __name__ == '__main__':

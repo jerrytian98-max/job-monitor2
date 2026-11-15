@@ -1,11 +1,78 @@
 # This file is safe to commit. On first local start it is copied to config.yaml.
 # Edit the generated config.yaml in the Web UI; do not put personal values here.
+# New cloud accounts inherit these site URLs, labels and scraping modes.
 
-job_sites: []
-job_site_labels: {}
+job_sites:
+  - 'https://careers.tencent.com/jobopportunity.html'
+  - 'https://careers.tencent.com/zh-cn/search.html?query=at_1,ot_40003001,ot_40003002,ot_40003003,ot_40003004'
+  - 'https://talent-holding.alibaba.com/off-campus/position-list'
+  - 'https://careers.aliyun.com/off-campus/position-list'
+  - 'https://talent.taotian.com/off-campus/position-list'
+  - 'https://talent.quark.cn/off-campus/position-list'
+  - 'https://talent.dingtalk.com/off-campus/home?lang=zh'
+  - 'https://recruitment.t-head.cn/off-campus/position-list'
+  - 'https://careers-tongyi.alibaba.com/off-campus/home?lang=zh'
+  - 'https://aidc-jobs.alibaba.com/zh/off-campus/position-list'
+  - 'https://zhaopin.meituan.com/web/social'
+  - 'https://jobs.bytedance.com/experienced/position/list?keywords=&category=&location=&project=&type=&job_hot_flag=&current=1&limit=10&functionCategory=&tag='
+  - 'https://careers.pddglobalhr.com/jobs'
+  - 'https://talent.baidu.com/jobs/social-list'
+  - 'https://zhaopin.kuaishou.cn/recruit/e/#/official/social/?workLocationCode=domestic'
+  - 'https://job.xiaohongshu.com/social/position?positionName=&jobTypes='
+  - 'https://soulapp.jobs.feishu.cn/index'
+  - 'https://app.mokahr.com/social-recruitment/high-flyer/140576#/jobs?page=1&anchorName=jobsList'
+  - 'https://app.mokahr.com/apply/moonshot/148506#/jobs?zhineng%5B0%5D=190965&zhineng%5B1%5D=195114&page=1&anchorName=jobsList&keyword='
+  - 'https://vrfi1sk8a0.jobs.feishu.cn/index/'
+  - 'https://app.mokahr.com/social-recruitment/zphz/148983?locale=zh-CN#/jobs'
+  - 'https://app.mokahr.com/social-recruitment/step/94904#/jobs/'
+job_site_labels:
+  'https://careers.tencent.com/jobopportunity.html': '腾讯'
+  'https://careers.tencent.com/zh-cn/search.html?query=at_1,ot_40003001,ot_40003002,ot_40003003,ot_40003004': '腾讯产品岗'
+  'https://talent-holding.alibaba.com/off-campus/position-list': '阿里控股'
+  'https://careers.aliyun.com/off-campus/position-list': '阿里云'
+  'https://talent.taotian.com/off-campus/position-list': '淘天'
+  'https://talent.quark.cn/off-campus/position-list': '夸克'
+  'https://talent.dingtalk.com/off-campus/home?lang=zh': '千问办公'
+  'https://recruitment.t-head.cn/off-campus/position-list': '平头哥'
+  'https://careers-tongyi.alibaba.com/off-campus/home?lang=zh': '通义'
+  'https://aidc-jobs.alibaba.com/zh/off-campus/position-list': '阿里国际'
+  'https://zhaopin.meituan.com/web/social': '美团'
+  'https://jobs.bytedance.com/experienced/position/list?keywords=&category=&location=&project=&type=&job_hot_flag=&current=1&limit=10&functionCategory=&tag=': '字节'
+  'https://careers.pddglobalhr.com/jobs': '拼多多'
+  'https://talent.baidu.com/jobs/social-list': '百度'
+  'https://zhaopin.kuaishou.cn/recruit/e/#/official/social/?workLocationCode=domestic': '快手'
+  'https://job.xiaohongshu.com/social/position?positionName=&jobTypes=': '小红书'
+  'https://soulapp.jobs.feishu.cn/index': 'SOUL'
+  'https://app.mokahr.com/social-recruitment/high-flyer/140576#/jobs?page=1&anchorName=jobsList': 'DeepSeek'
+  'https://app.mokahr.com/apply/moonshot/148506#/jobs?zhineng%5B0%5D=190965&zhineng%5B1%5D=195114&page=1&anchorName=jobsList&keyword=': '月之暗面'
+  'https://vrfi1sk8a0.jobs.feishu.cn/index/': 'MiniMax'
+  'https://app.mokahr.com/social-recruitment/zphz/148983?locale=zh-CN#/jobs': '智谱'
+  'https://app.mokahr.com/social-recruitment/step/94904#/jobs/': '阶跃星辰'
 # Per-URL mode: search = use the global job keywords; fixed = capture only
 # the jobs returned by that exact URL, without submitting global keywords.
-job_site_modes: {}
+job_site_modes:
+  'https://careers.tencent.com/jobopportunity.html': search
+  'https://careers.tencent.com/zh-cn/search.html?query=at_1,ot_40003001,ot_40003002,ot_40003003,ot_40003004': fixed
+  'https://talent-holding.alibaba.com/off-campus/position-list': search
+  'https://careers.aliyun.com/off-campus/position-list': search
+  'https://talent.taotian.com/off-campus/position-list': search
+  'https://talent.quark.cn/off-campus/position-list': search
+  'https://talent.dingtalk.com/off-campus/home?lang=zh': search
+  'https://recruitment.t-head.cn/off-campus/position-list': search
+  'https://careers-tongyi.alibaba.com/off-campus/home?lang=zh': search
+  'https://aidc-jobs.alibaba.com/zh/off-campus/position-list': search
+  'https://zhaopin.meituan.com/web/social': search
+  'https://jobs.bytedance.com/experienced/position/list?keywords=&category=&location=&project=&type=&job_hot_flag=&current=1&limit=10&functionCategory=&tag=': search
+  'https://careers.pddglobalhr.com/jobs': search
+  'https://talent.baidu.com/jobs/social-list': search
+  'https://zhaopin.kuaishou.cn/recruit/e/#/official/social/?workLocationCode=domestic': search
+  'https://job.xiaohongshu.com/social/position?positionName=&jobTypes=': search
+  'https://soulapp.jobs.feishu.cn/index': search
+  'https://app.mokahr.com/social-recruitment/high-flyer/140576#/jobs?page=1&anchorName=jobsList': search
+  'https://app.mokahr.com/apply/moonshot/148506#/jobs?zhineng%5B0%5D=190965&zhineng%5B1%5D=195114&page=1&anchorName=jobsList&keyword=': search
+  'https://vrfi1sk8a0.jobs.feishu.cn/index/': search
+  'https://app.mokahr.com/social-recruitment/zphz/148983?locale=zh-CN#/jobs': search
+  'https://app.mokahr.com/social-recruitment/step/94904#/jobs/': search
 job_keywords: []
 cities: []
 exclude_keywords: []
@@ -20,4 +87,9 @@ email:
 
 gemini_api_key: ''
 gemini_model: gemini-3.5-flash-lite
+openai_api_key: ''
+openai_model: gpt-5.4-mini
+deepseek_api_key: ''
+deepseek_model: deepseek-flash
+ai_provider: gemini
 ai_filter_prompt: ''

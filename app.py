@@ -8,6 +8,8 @@ import yaml
 
 import os
 from config_bootstrap import ensure_config_file
+from local_schedule import WeeklySchedule
+from job_tags import job_listing
 from profile_config import (
     config_filename,
     normalize_profile,
@@ -19,10 +21,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE = normalize_profile(os.environ.get('JOB_PROFILE', ''))
 PROFILE_SUFFIX = profile_suffix(PROFILE)
 PROFILE_DISPLAY_NAME = profile_display_name(PROFILE)
-CONFIG_FILE = ensure_config_file(
-    os.path.join(BASE_DIR, config_filename(PROFILE))
+CONFIG_FILE = ensure_config_file(os.environ.get(
+    'JOB_MONITOR_CONFIG_FILE', os.path.join(BASE_DIR, config_filename(PROFILE))
+))
+LOG_FILE = os.path.join(
+    os.environ.get('JOB_MONITOR_DATA_DIR') or BASE_DIR,
+    f'app{PROFILE_SUFFIX}.log',
 )
-LOG_FILE = os.path.join(BASE_DIR, f'app{PROFILE_SUFFIX}.log')
 
 import threading
 from datetime import datetime
@@ -30,27 +35,21 @@ from main import JobMonitor
 from database import db
 from matcher import CACHE_FILE
 import logging
-import queue
+from event_stream import EventHistory, encode_event_batch
 import json
-import copy
 import math
-from urllib.parse import urlparse
 from scraper_with_callback import get_scraper_with_callback
 from notifier import EmailNotifier
-from site_labels import (
-    build_site_labels,
-    build_site_modes,
-    combine_site_keyword_labels,
-    get_site_label,
-    get_site_mode,
-    SITE_MODE_FIXED,
-)
 from github_sync import (
     GitHubSyncError,
     download_latest_job_state,
     public_settings as public_github_settings,
     save_settings as save_github_settings,
     upload_local_configuration,
+)
+from web_config import (
+    JOBS_PER_PAGE, SECRET_MASK, validate_config, redact_config,
+    preserve_masked_secrets, unique_site_labels_by_domain, update_ai_filter_config,
 )
 
 # 配置日志 - 同时输出到文件和控制台
@@ -85,12 +84,8 @@ monitor_status = {
     'running_time': None
 }
 
-# 分页设置
-JOBS_PER_PAGE = 10
-SECRET_MASK = '••••••••'
-
-# 事件队列（用于实时推送）
-event_queue = queue.Queue()
+# Each tab reads with its own cursor; bounded history replaces a shared queue.
+event_history = EventHistory()
 
 
 def load_config():
@@ -113,152 +108,24 @@ def save_config(config):
         with open(temp_file, 'w', encoding='utf-8') as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
         os.replace(temp_file, CONFIG_FILE)
+        if config.get('local_schedule'):
+            WeeklySchedule(CONFIG_FILE).configure(config['local_schedule'])
         return True
     except Exception as e:
         logger.error(f"保存配置失败: {e}")
         return False
 
 
-def validate_config(config: dict) -> dict:
-    """验证并规范化来自 Web 界面的配置。"""
-    if not isinstance(config, dict):
-        raise ValueError("配置必须是 JSON 对象")
-
-    required = ('job_keywords', 'cities', 'exclude_keywords', 'job_sites', 'email', 'check_interval')
-    missing = [field for field in required if field not in config]
-    if missing:
-        raise ValueError(f"缺少字段: {', '.join(missing)}")
-
-    normalized = dict(config)
-    for field in ('job_keywords', 'cities', 'exclude_keywords', 'job_sites'):
-        value = normalized.get(field, [])
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise ValueError(f"{field} 必须是字符串列表")
-        normalized[field] = list(dict.fromkeys(item.strip() for item in value if item.strip()))
-
-    for url in normalized['job_sites']:
-        parsed = urlparse(url)
-        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
-            raise ValueError(f"无效的招聘网址: {url}")
-
-    raw_site_labels = normalized.get('job_site_labels', {})
-    if raw_site_labels is not None and not isinstance(raw_site_labels, dict):
-        raise ValueError("job_site_labels 必须是网址到标签的映射")
-    normalized['job_site_labels'] = build_site_labels(
-        normalized['job_sites'],
-        raw_site_labels,
-    )
-
-    raw_site_modes = normalized.get('job_site_modes', {})
-    if raw_site_modes is not None and not isinstance(raw_site_modes, dict):
-        raise ValueError("job_site_modes 必须是网址到抓取方式的映射")
-    invalid_modes = [
-        url
-        for url, mode in (raw_site_modes or {}).items()
-        if url in normalized['job_sites']
-        and str(mode or '').strip().lower() not in ('', 'search', 'fixed')
-    ]
-    if invalid_modes:
-        raise ValueError("抓取方式只能是 search 或 fixed")
-    normalized['job_site_modes'] = build_site_modes(
-        normalized['job_sites'],
-        raw_site_modes,
-    )
-
-    try:
-        interval = float(normalized.get('check_interval', 2))
-    except (TypeError, ValueError):
-        raise ValueError("监测间隔必须是数字")
-    if not 1 / 60 <= interval <= 168:
-        raise ValueError("监测间隔必须在 1 分钟到 168 小时之间")
-    normalized['check_interval'] = interval
-
-    email = normalized.get('email', {})
-    if not isinstance(email, dict):
-        raise ValueError("email 必须是对象")
-    normalized_email = {
-        'sender': str(email.get('sender', '')).strip(),
-        'auth_code': str(email.get('auth_code', '')).strip(),
-        'receiver': str(email.get('receiver', '')).strip(),
-        'smtp_server': str(email.get('smtp_server', '')).strip(),
-    }
-    try:
-        normalized_email['smtp_port'] = int(email.get('smtp_port', 587))
-    except (TypeError, ValueError):
-        raise ValueError("SMTP 端口必须是整数")
-    if not 1 <= normalized_email['smtp_port'] <= 65535:
-        raise ValueError("SMTP 端口超出有效范围")
-    normalized['email'] = normalized_email
-
-    normalized['gemini_api_key'] = str(normalized.get('gemini_api_key', '')).strip()
-    normalized['ai_filter_prompt'] = str(normalized.get('ai_filter_prompt', '')).strip()
-    normalized['gemini_model'] = str(
-        normalized.get('gemini_model', 'gemini-3.5-flash-lite')
-    ).strip() or 'gemini-3.5-flash-lite'
-    return normalized
-
-
-def redact_config(config: dict) -> dict:
-    """返回适合发送到浏览器的配置副本。"""
-    public_config = copy.deepcopy(config)
-    public_config['job_site_labels'] = build_site_labels(
-        public_config.get('job_sites', []),
-        public_config.get('job_site_labels', {}),
-    )
-    public_config['job_site_modes'] = build_site_modes(
-        public_config.get('job_sites', []),
-        public_config.get('job_site_modes', {}),
-    )
-    if public_config.get('gemini_api_key'):
-        public_config['gemini_api_key'] = SECRET_MASK
-    email = public_config.get('email')
-    if isinstance(email, dict) and email.get('auth_code'):
-        email['auth_code'] = SECRET_MASK
-    return public_config
-
-
-def preserve_masked_secrets(config: dict, existing: dict) -> dict:
-    """浏览器提交掩码时保留磁盘上的原值。"""
-    if config.get('gemini_api_key') == SECRET_MASK:
-        config['gemini_api_key'] = existing.get('gemini_api_key', '')
-    email = config.get('email')
-    existing_email = existing.get('email', {})
-    if isinstance(email, dict) and email.get('auth_code') == SECRET_MASK:
-        email['auth_code'] = existing_email.get('auth_code', '')
-    return config
-
-
-def unique_site_labels_by_domain(config: dict) -> dict:
-    """返回域名到唯一网址标签的映射；同域多标签时不做猜测。"""
-    job_sites = config.get('job_sites', []) if isinstance(config, dict) else []
-    labels = build_site_labels(
-        job_sites,
-        config.get('job_site_labels', {}) if isinstance(config, dict) else {},
-    )
-    grouped = {}
-    for site_url in job_sites:
-        domain = urlparse(site_url).netloc.lower()
-        label = labels.get(site_url, '').strip()
-        if domain and label:
-            grouped.setdefault(domain, set()).add(label)
-    return {
-        domain: next(iter(domain_labels))
-        for domain, domain_labels in grouped.items()
-        if len(domain_labels) == 1
-    }
 
 
 def send_event(event_type: str, data: dict):
-    """发送事件到队列"""
+    """Publish once; every browser tab can independently read the event."""
     event = {
         'type': event_type,
         'data': data,
         'timestamp': datetime.now().strftime('%H:%M:%S')
     }
-    try:
-        event_queue.put_nowait(event)
-    except queue.Full:
-        pass  # 队列满时忽略
+    event_history.publish(event)
 
 
 # 全局回调函数
@@ -284,199 +151,28 @@ def job_callback(job: dict):
 
 
 class WebJobMonitor(JobMonitor):
-    """
-    Web环境下的监测器，支持回调
-    """
+    """Use the shared monitor pipeline with Web callbacks and statistics."""
+
     def __init__(self, config_file: str = CONFIG_FILE, test_mode: bool = False):
         super().__init__(config_file, test_mode)
         self.status_callback = status_callback
         self.job_callback = job_callback
 
-    def _scrape_all_sites(self) -> list:
-        """抓取全部配置网址；单个网址失败不影响后续网址。"""
-        all_jobs = []
-        
-        keywords = self.config.get('job_keywords', [])
-        cities = self.config.get('cities', [])
-        job_sites = self.config.get('job_sites', [])
-        
-        for site_url in job_sites:
-            site_label = get_site_label(self.config, site_url)
-            site_mode = get_site_mode(self.config, site_url)
-            scraper = get_scraper_with_callback(site_url, None, None)
-            if scraper:
-                try:
-                    logger.info(f"开始抓取目标网址 [{site_label}]: {site_url}")
-                    if site_mode == SITE_MODE_FIXED:
-                        jobs = scraper.scrape_jobs(
-                            site_url,
-                            [],
-                            cities,
-                            search_mode=site_mode,
-                        )
-                    else:
-                        jobs = scraper.scrape_jobs(site_url, keywords, cities)
-                    for job in jobs:
-                        if isinstance(job, dict):
-                            if site_mode == SITE_MODE_FIXED:
-                                job['_fixed_url_mode'] = True
-                            search_keywords = job.get('_search_keywords')
-                            if not isinstance(search_keywords, (list, tuple, set)):
-                                search_keywords = [job.get('_search_keyword', '')]
-                            job['site_label'] = combine_site_keyword_labels(
-                                site_label,
-                                search_keywords,
-                            )
-                    all_jobs.extend(jobs)
-                    logger.info(
-                        f"从 [{site_label}] {site_url} 抓取到 {len(jobs)} 个匹配职位"
-                    )
-                
-                except Exception as e:
-                    logger.error(f"抓取目标网址 [{site_label}] {site_url} 时出错: {e}")
-        
-        return all_jobs
+    def _create_scraper(self, site_url):
+        return get_scraper_with_callback(site_url, None, None)
 
-    def check_jobs(self) -> bool:
-        """逐个网址抓取和判定新职位，确保每个网址都完整执行。"""
-        checked_at = datetime.now().isoformat(timespec='seconds')
-        self.last_check_result = {
-            'success': False,
-            'checked_at': checked_at,
-            'scraped_jobs': 0,
-            'matched_jobs': 0,
-            'notification_sent': False,
-        }
-
-        matched_jobs = []
-        scraped_total = 0
-        seen_jobs = set()
-
-        try:
-            keywords = self.config.get('job_keywords', [])
-            cities = self.config.get('cities', [])
-            job_sites = list(dict.fromkeys(self.config.get('job_sites', [])))
-
-            for site_url in job_sites:
-                site_label = get_site_label(self.config, site_url)
-                site_mode = get_site_mode(self.config, site_url)
-                site_new_jobs = []
-                self.status_callback(
-                    f"正在抓取【{site_label}】",
-                    "info",
-                    True,
-                )
-
-                try:
-                    scraper = get_scraper_with_callback(site_url, None, None)
-                    if not scraper:
-                        raise RuntimeError("无法创建招聘网站抓取器")
-
-                    if site_mode == SITE_MODE_FIXED:
-                        jobs = scraper.scrape_jobs(
-                            site_url,
-                            [],
-                            cities,
-                            search_mode=site_mode,
-                        ) or []
-                    else:
-                        jobs = scraper.scrape_jobs(site_url, keywords, cities) or []
-                    scraped_total += len(jobs)
-
-                    unique_jobs = []
-                    for job in jobs:
-                        if not isinstance(job, dict):
-                            continue
-                        if site_mode == SITE_MODE_FIXED:
-                            job['_fixed_url_mode'] = True
-                        search_keywords = job.get('_search_keywords')
-                        if not isinstance(search_keywords, (list, tuple, set)):
-                            search_keywords = [job.get('_search_keyword', '')]
-                        job['site_label'] = combine_site_keyword_labels(
-                            site_label,
-                            search_keywords,
-                        )
-                        job_key = (
-                            str(job.get('url') or '').strip(),
-                            str(job.get('title') or '').strip(),
-                        )
-                        if job_key in seen_jobs:
-                            continue
-                        seen_jobs.add(job_key)
-                        unique_jobs.append(job)
-
-                    site_new_jobs = self.matcher.filter_jobs(unique_jobs)
-                    matched_jobs.extend(site_new_jobs)
-
-                    if callable(self.job_callback):
-                        for job in site_new_jobs:
-                            self.job_callback(job)
-
-                    logger.info(
-                        "抓取完毕 [%s]，找到 %s 个新职位",
-                        site_label,
-                        len(site_new_jobs),
-                    )
-                except Exception as e:
-                    logger.error(
-                        "抓取目标网址 [%s] %s 时出错: %s",
-                        site_label,
-                        site_url,
-                        e,
-                    )
-                    self._emit_status(
-                        f"抓取【{site_label}】发生错误，已继续下一个网址",
-                        "error",
-                    )
-                finally:
-                    self.status_callback(
-                        f"抓取完毕【{site_label}】找到{len(site_new_jobs)}个新职位",
-                        "success",
-                        True,
-                    )
-
-            self.last_check_result['scraped_jobs'] = scraped_total
-            self.last_check_result['matched_jobs'] = len(matched_jobs)
-
-            if matched_jobs:
-                success, notified_count, failed_labels = (
-                    self._send_notification_summary(matched_jobs)
-                )
-                self.last_check_result['notification_sent'] = notified_count > 0
-                if success:
-                    self._emit_status(
-                        f"本轮监测完成，共发现并通知{notified_count}个新职位",
-                        "success",
-                    )
-                else:
-                    logger.error(
-                        "以下网址标签的邮件发送失败: %s",
-                        '、'.join(failed_labels),
-                    )
-                    self._emit_status(
-                        "发现新职位，但邮件发送失败；下次将重试",
-                        "error",
-                    )
-                self.last_check_result['success'] = success
-                return success
-
-            self.last_check_result['success'] = True
-            self._emit_status("本轮监测完成，没有新职位", "success")
-            return True
-        except Exception as e:
-            logger.error(f"检查职位时出错: {e}")
-            self.last_check_result['success'] = False
-            self._emit_status(f"检查职位时出错: {e}", "error")
-            return False
-        finally:
-            stats = db.get_statistics()
-            monitor_status.update({
-                'last_check': self.last_check_result.get('checked_at'),
-                'total_jobs_found': stats.get('total_jobs', 0),
-                'new_jobs_today': stats.get('new_jobs_today', 0),
-                'last_scraped_jobs': self.last_check_result.get('scraped_jobs', 0),
-                'last_matched_jobs': self.last_check_result.get('matched_jobs', 0),
-            })
+    def _after_check(self):
+        stats = ({
+            'total_jobs': monitor_status.get('total_jobs_found', 0),
+            'new_jobs_today': monitor_status.get('new_jobs_today', 0),
+        } if getattr(self, 'test_mode', False) else db.get_statistics())
+        monitor_status.update({
+            'last_check': self.last_check_result.get('checked_at'),
+            'total_jobs_found': stats.get('total_jobs', 0),
+            'new_jobs_today': stats.get('new_jobs_today', 0),
+            'last_scraped_jobs': self.last_check_result.get('scraped_jobs', 0),
+            'last_matched_jobs': self.last_check_result.get('matched_jobs', 0),
+        })
 
 
 def run_monitor():
@@ -536,6 +232,8 @@ def update_config():
         # 保存配置
         if save_config(config):
             logger.info("配置已更新")
+            if config.get('local_schedule', {}).get('enabled') and not is_monitoring and config.get('job_sites'):
+                start_monitor()
             return jsonify({'success': True, 'message': '配置保存成功'})
         else:
             return jsonify({'success': False, 'message': '保存配置失败'})
@@ -545,6 +243,17 @@ def update_config():
     except Exception as e:
         logger.error(f"更新配置失败: {e}")
         return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/ai-filter', methods=['POST'])
+def update_ai_filter():
+    try:
+        updated = update_ai_filter_config(load_config(), request.get_json(silent=True))
+        if not save_config(updated):
+            return jsonify(success=False, message='保存失败'), 500
+        return jsonify(success=True, message='AI 筛选设置已保存')
+    except ValueError as error:
+        return jsonify(success=False, message=str(error)), 400
 
 
 @app.route('/api/github-sync/settings', methods=['GET'])
@@ -658,6 +367,11 @@ def start_monitor():
         if not config.get('job_sites'):
             return jsonify({'success': False, 'message': '请先至少添加一个招聘网址'}), 400
 
+        if config.get('local_schedule') and not config['local_schedule']['enabled']:
+            config['local_schedule']['enabled'] = True
+            if not save_config(config):
+                raise ValueError('无法保存运行计划')
+
         with monitor_lock:
             if is_monitoring:
                 return jsonify({'success': False, 'message': '监测已在运行中'})
@@ -695,6 +409,11 @@ def stop_monitor():
             if not is_monitoring:
                 return jsonify({'success': False, 'message': '监测未运行'})
             monitor_status['status'] = 'stopping'
+            config = load_config()
+            if config.get('local_schedule'):
+                config['local_schedule']['enabled'] = False
+                if not save_config(config):
+                    raise ValueError('无法保存暂停状态')
             monitor_stop_event.set()
 
         if monitor_thread and monitor_thread.is_alive():
@@ -760,52 +479,7 @@ def test_check():
 def get_jobs():
     """获取职位列表"""
     try:
-        page = max(1, int(request.args.get('page', 1)))
-        keyword = request.args.get('keyword', '').strip()[:200]
-        site_label_keyword = request.args.get('site_label', '').strip()[:100]
-        config = load_config()
-        source_label_map = unique_site_labels_by_domain(config)
-        db.backfill_site_labels(source_label_map)
-
-        total = db.count_jobs(keyword, site_label_keyword)
-        total_pages = math.ceil(total / JOBS_PER_PAGE) if total else 0
-        if total_pages:
-            page = min(page, total_pages)
-        offset = (page - 1) * JOBS_PER_PAGE
-
-        # 搜索或获取全部
-        if keyword:
-            jobs = db.search_jobs(
-                keyword,
-                site_label_keyword,
-                limit=JOBS_PER_PAGE,
-                offset=offset,
-            )
-        else:
-            jobs = db.get_all_jobs(
-                limit=JOBS_PER_PAGE,
-                offset=offset,
-                site_label_keyword=site_label_keyword,
-            )
-
-        for job in jobs:
-            job['site_label'] = (
-                str(job.get('site_label') or '').strip()
-                or source_label_map.get(str(job.get('source_site') or '').strip().lower(), '')
-                or str(job.get('source_site') or '').strip()
-                or '未知网址'
-            )
-
-        return jsonify({
-            'success': True,
-            'data': jobs,
-            'pagination': {
-                'page': page,
-                'per_page': JOBS_PER_PAGE,
-                'total': total,
-                'total_pages': total_pages,
-            },
-        })
+        return jsonify(job_listing(db, load_config(), request.args, JOBS_PER_PAGE))
 
     except Exception as e:
         logger.error(f"获取职位列表失败: {e}")
@@ -866,20 +540,12 @@ def get_statistics():
 
 @app.route('/api/events')
 def events():
-    """Server-Sent Events - 实时推送工作状态"""
-    def generate():
-        while True:
-            try:
-                # 从队列获取事件
-                event = event_queue.get(timeout=30)
-                yield f"data: {json.dumps(event)}\n\n"
-            except queue.Empty:
-                # 发送心跳
-                yield "data: {\"type\": \"heartbeat\"}\n\n"
-            except GeneratorExit:
-                break
-
-    return Response(generate(), mimetype='text/event-stream')
+    """Return a finite event batch; the browser resumes with its own cursor."""
+    cursor, records = event_history.read(request.headers.get('Last-Event-ID'))
+    return Response(
+        encode_event_batch(records, cursor), mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
+    )
 
 
 @app.route('/api/email/test', methods=['POST'])
@@ -925,4 +591,8 @@ if __name__ == '__main__':
     print()
     
     debug = os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes')
-    app.run(host='127.0.0.1', port=port, debug=debug, use_reloader=debug)
+    saved = load_config()
+    if saved.get('local_schedule', {}).get('enabled') and saved.get('job_sites'):
+        with app.app_context():
+            start_monitor()
+    app.run(host='127.0.0.1', port=port, debug=debug, use_reloader=False)

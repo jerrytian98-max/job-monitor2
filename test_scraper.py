@@ -1,19 +1,39 @@
 """爬虫解析器的离线回归测试，不访问真实招聘网站。"""
 
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from official_site_scraper import OfficialSiteScraper
 from scraper import UniversalScraperWithPlaywright, get_scraper
 
 
 class ScraperTests(unittest.TestCase):
+    def test_baidu_fixed_url_keeps_url_filters_instead_of_requesting_all_jobs(self):
+        scraper = OfficialSiteScraper()
+        with patch.object(scraper, '_scrape_baidu_keyword') as api, patch(
+            'official_site_scraper.sync_playwright', side_effect=RuntimeError('browser fixture')
+        ) as browser:
+            self.assertEqual(scraper.scrape_jobs(
+                'https://talent.baidu.com/jobs/social-list?workPlace=beijing',
+                ['ignored-search-term'], search_mode='fixed',
+            ), [])
+        api.assert_not_called()
+        browser.assert_called_once()
+
     def test_missing_publish_date_is_saved_as_unknown(self):
         scraper = OfficialSiteScraper()
 
         self.assertEqual(scraper._normalize_date(None), "未知")
         self.assertEqual(scraper._normalize_date(""), "未知")
         self.assertEqual(scraper._normalize_date(float("inf")), "未知")
+
+    def test_high_flyer_moka_site_uses_deepseek_company_name(self):
+        url = (
+            "https://app.mokahr.com/social-recruitment/high-flyer/140576"
+            "#/jobs?page=1&anchorName=jobsList"
+        )
+
+        self.assertEqual(OfficialSiteScraper._company_for_url(url), "DeepSeek")
 
     def test_factory_returns_universal_scraper(self):
         scraper = get_scraper("https://jobs.example.com/search")
@@ -149,6 +169,42 @@ class ScraperTests(unittest.TestCase):
             jobs[0]["url"],
             "https://zhaopin.kuaishou.cn/recruit/e/"
             "#/official/social/job-info/24968",
+        )
+
+    def test_baidu_api_payload_maps_full_details_and_public_url(self):
+        scraper = OfficialSiteScraper()
+        target_url = "https://talent.baidu.com/jobs/social-list"
+        payload = {
+            "status": "ok",
+            "data": {
+                "list": [{
+                    "postId": "baidu-1",
+                    "name": "国际化业务合规专家",
+                    "workPlace": "北京市",
+                    "workContent": "负责国际化业务合规体系建设",
+                    "serviceCondition": "熟悉数据与隐私法律法规",
+                    "postType": "综合",
+                    "bgShortName": "MEG",
+                    "recruitNum": "1",
+                    "publishDate": "2026-10-20",
+                }]
+            },
+        }
+
+        jobs = scraper._jobs_from_payload(
+            payload,
+            "https://talent.baidu.com/httservice/getPostListNew",
+            target_url,
+        )
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["company"], "百度")
+        self.assertEqual(jobs[0]["city"], "北京市")
+        self.assertIn("国际化业务合规体系", jobs[0]["description"])
+        self.assertIn("数据与隐私法律法规", jobs[0]["description"])
+        self.assertEqual(
+            jobs[0]["url"],
+            "https://talent.baidu.com/jobs/detail/SOCIAL/baidu-1",
         )
 
     def test_bilibili_api_payload_maps_to_searchable_job_details(self):
@@ -348,6 +404,51 @@ class ScraperTests(unittest.TestCase):
             "test-token",
         )
 
+    def test_baidu_keyword_api_fetches_every_reported_page(self):
+        scraper = OfficialSiteScraper()
+
+        def response(page_no, post_id):
+            result = Mock()
+            result.raise_for_status.return_value = None
+            result.json.return_value = {
+                "status": "ok",
+                "data": {
+                    "total": "2",
+                    "pages": 2,
+                    "list": [{
+                        "postId": post_id,
+                        "name": f"法务职位-{post_id}",
+                        "workPlace": "北京市",
+                        "workContent": "负责法律事务",
+                        "publishDate": "2026-10-20",
+                    }],
+                    "pageNum": page_no,
+                    "pageSize": 10,
+                },
+            }
+            return result
+
+        scraper.session.post = Mock(side_effect=[
+            response(1, "bd-1"),
+            response(2, "bd-2"),
+        ])
+
+        jobs = scraper._scrape_baidu_keyword(
+            "https://talent.baidu.com/jobs/social-list",
+            "法务",
+        )
+
+        self.assertEqual([job["title"] for job in jobs], [
+            "法务职位-bd-1",
+            "法务职位-bd-2",
+        ])
+        self.assertTrue(all(job["_search_keyword"] == "法务" for job in jobs))
+        self.assertEqual(scraper.session.post.call_count, 2)
+        self.assertEqual(
+            scraper.session.post.call_args_list[1].kwargs["data"]["curPage"],
+            2,
+        )
+
     def test_keyword_navigation_urls_avoid_default_result_requests(self):
         byte_url = OfficialSiteScraper._keyword_navigation_url(
             "https://jobs.bytedance.com/experienced/position/list?keywords=&limit=10",
@@ -372,6 +473,151 @@ class ScraperTests(unittest.TestCase):
         self.assertIn("/search.html?keyword=%E6%B3%95%E5%8A%A1", tencent_url)
         self.assertIn("name=%E6%B3%95%E5%8A%A1", bilibili_url)
         self.assertIn("type=3", bilibili_url)
+
+    def test_unknown_sites_reuse_keyword_parameters_in_query_and_hash(self):
+        query_url = OfficialSiteScraper._keyword_navigation_url(
+            "https://careers.example.com/openings?job_title=&lang=zh",
+            "法务",
+        )
+        hash_url = OfficialSiteScraper._keyword_navigation_url(
+            "https://hire.example.com/#/jobs?page=1&searchText=",
+            "合规",
+        )
+
+        self.assertIn("job_title=%E6%B3%95%E5%8A%A1", query_url)
+        self.assertIn("lang=zh", query_url)
+        self.assertIn("searchText=%E5%90%88%E8%A7%84", hash_url)
+        self.assertEqual(
+            OfficialSiteScraper._keyword_from_url(hash_url),
+            "合规",
+        )
+
+    def test_search_field_semantics_prefer_job_search_and_reject_login_fields(self):
+        score = OfficialSiteScraper._score_search_field_metadata
+
+        job_search = score({
+            "type": "text",
+            "placeholder": "输入岗位关键词搜索",
+            "name": "searchText",
+            "context": "社会招聘 职位搜索",
+        })
+        generic_search = score({
+            "type": "search",
+            "name": "q",
+            "context": "Open positions",
+        })
+        form_context_only = score({
+            "type": "text",
+            "context": "搜索招聘职位",
+        })
+        email = score({
+            "type": "email",
+            "placeholder": "邮箱",
+            "name": "email",
+        })
+        city = score({
+            "type": "text",
+            "placeholder": "选择城市",
+            "name": "location",
+        })
+
+        self.assertGreater(job_search, generic_search)
+        self.assertGreaterEqual(generic_search, 20)
+        self.assertGreaterEqual(form_context_only, 20)
+        self.assertLess(email, 0)
+        self.assertLess(city, 0)
+
+        action_score = OfficialSiteScraper._score_search_action_metadata
+        self.assertGreater(action_score({
+            "type": "button",
+            "html": '<svg class="search-icon"></svg>',
+        }), 0)
+
+    def test_unknown_json_schema_is_mapped_when_it_has_job_clues(self):
+        scraper = OfficialSiteScraper()
+        payload = {
+            "result": {
+                "items": [{
+                    "job_title": "国际业务法务",
+                    "job_id": "legal-1",
+                    "detail_url": "/careers/job-detail/legal-1",
+                    "work_location": "上海",
+                    "job_description": "负责国际合同及合规工作",
+                    "requirements": "五年以上相关经验",
+                    "published_at": "2026-10-20",
+                }]
+            }
+        }
+
+        jobs = scraper._jobs_from_payload(
+            payload,
+            "https://careers.example.com/api/v2/open-positions",
+            "https://careers.example.com/openings",
+        )
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "国际业务法务")
+        self.assertEqual(jobs[0]["city"], "上海")
+        self.assertIn("国际合同", jobs[0]["description"])
+        self.assertIn("五年以上", jobs[0]["description"])
+        self.assertEqual(
+            jobs[0]["url"],
+            "https://careers.example.com/careers/job-detail/legal-1",
+        )
+
+    def test_jobposting_json_ld_is_used_as_a_vendor_neutral_fallback(self):
+        scraper = OfficialSiteScraper()
+        surface = Mock()
+        surface.locator.return_value.evaluate_all.return_value = ["""
+        {
+          "@context": "https://schema.org",
+          "@type": "JobPosting",
+          "title": "产品合规经理",
+          "description": "负责产品合规体系建设",
+          "datePosted": "2026-10-21",
+          "url": "/jobs/compliance-1",
+          "hiringOrganization": {"name": "示例科技"},
+          "jobLocation": {
+            "@type": "Place",
+            "address": {"addressLocality": "深圳"}
+          }
+        }
+        """]
+
+        jobs = scraper._jobs_from_structured_data(
+            surface,
+            "https://careers.example.com/openings",
+            "合规",
+        )
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "产品合规经理")
+        self.assertEqual(jobs[0]["company"], "示例科技")
+        self.assertEqual(jobs[0]["city"], "深圳")
+        self.assertEqual(jobs[0]["publish_time"], "2026-10-21")
+
+    def test_generic_payload_rejects_unrelated_navigation_lists(self):
+        scraper = OfficialSiteScraper()
+        payload = {
+            "links": [{"title": "联系我们", "url": "/contact"}],
+        }
+
+        self.assertEqual(
+            scraper._jobs_from_payload(
+                payload,
+                "https://example.com/api/navigation",
+                "https://example.com/careers",
+            ),
+            [],
+        )
+
+    def test_job_url_detection_accepts_common_detail_variants(self):
+        looks_like_job = OfficialSiteScraper._looks_like_job_url
+
+        self.assertTrue(looks_like_job("https://example.com/jobs/12345"))
+        self.assertTrue(looks_like_job("https://example.com/job-detail/12345"))
+        self.assertTrue(looks_like_job("https://example.com/detail?positionId=12345"))
+        self.assertFalse(looks_like_job("https://example.com/about"))
 
     def test_response_keyword_guard_rejects_delayed_default_list(self):
         default_response = Mock()

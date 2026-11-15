@@ -1,0 +1,6 @@
+[Unit]
+Description=Renew Job Monitor IP certificate
+
+[Service]
+Type=oneshot
+ExecStart=/opt/job-monitor-certbot/bin/certbot renew --quiet --deploy-hook "systemctl reload nginx"

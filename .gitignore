@@ -31,3 +31,11 @@ job-monitor-site-config*.yaml
 
 # Atomic-write leftovers
 config*.tmp
+config*.schedule.json
+config*.schedule.json.tmp
+cloud_data/
+admin-email.yaml
+
+# Local scratch work and generated previews
+tmp/
+output/

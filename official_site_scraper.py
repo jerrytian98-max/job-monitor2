@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+import json
 import logging
 import re
 import time
@@ -29,6 +30,12 @@ logger = logging.getLogger(__name__)
 UNKNOWN_CITY = "未知"
 NEGOTIABLE_SALARY = "面议"
 MAX_JOBS_PER_SEARCH = 30
+
+SEARCH_QUERY_KEYS = {
+    "q", "query", "search", "searchtext", "searchword", "key",
+    "keyword", "keywords", "jobname", "jobtitle", "positionname",
+    "positiontitle",
+}
 
 
 class OfficialSiteScraper:
@@ -134,6 +141,34 @@ class OfficialSiteScraper:
                 )
                 return jobs
 
+        # Baidu's desktop page currently replaces itself with about:blank in
+        # automated Chromium sessions. The search box is backed by a public
+        # endpoint that also returns the complete responsibilities and
+        # requirements, so use it directly instead of treating the redirect as
+        # an empty search result.
+        if parsed_target.netloc.lower() == "talent.baidu.com" and not fixed_url_mode:
+            baidu_jobs: List[Dict] = []
+            api_search_complete = True
+            for _, effective_keyword in search_plan:
+                term_jobs = self._scrape_baidu_keyword(
+                    target_url,
+                    effective_keyword,
+                )
+                if term_jobs is None:
+                    api_search_complete = False
+                    break
+                term_jobs = self._limit_search_results(term_jobs)
+                baidu_jobs = self._merge_jobs(baidu_jobs, term_jobs)
+
+            if api_search_complete:
+                jobs = self._finalize_jobs(baidu_jobs, parsed_target.netloc)
+                logger.info(
+                    "从 %s 提取到 %s 个带明细的职位",
+                    target_url,
+                    len(jobs),
+                )
+                return jobs
+
         jobs: List[Dict] = []
         try:
             with sync_playwright() as playwright:
@@ -204,7 +239,12 @@ class OfficialSiteScraper:
 
         def capture_response(response):
             content_type = str(response.headers.get("content-type") or "").lower()
-            if "json" not in content_type:
+            likely_data_endpoint = bool(re.search(
+                r"/(?:api|ajax|graphql|job|jobs|position|positions|post|recruit|career)(?:/|\?|$)",
+                str(response.url or ""),
+                flags=re.IGNORECASE,
+            ))
+            if "json" not in content_type and not likely_data_endpoint:
                 return
             try:
                 payload = response.json()
@@ -371,6 +411,25 @@ class OfficialSiteScraper:
             return urlunparse(
                 parsed._replace(path="/search.html", query=urlencode(query))
             )
+
+        # Unknown recruitment systems often expose the keyword in an ordinary
+        # query string (or inside an SPA hash route).  Reuse that contract when
+        # it already exists instead of guessing a brand-specific endpoint.
+        for key in list(query):
+            normalized_key = re.sub(r"[^a-z0-9]", "", key.casefold())
+            if normalized_key in SEARCH_QUERY_KEYS:
+                query[key] = term
+                return urlunparse(parsed._replace(query=urlencode(query)))
+
+        fragment_path, separator, fragment_query = parsed.fragment.partition("?")
+        if separator:
+            hash_query = dict(parse_qsl(fragment_query, keep_blank_values=True))
+            for key in list(hash_query):
+                normalized_key = re.sub(r"[^a-z0-9]", "", key.casefold())
+                if normalized_key in SEARCH_QUERY_KEYS:
+                    hash_query[key] = term
+                    fragment = f"{fragment_path}?{urlencode(hash_query)}"
+                    return urlunparse(parsed._replace(fragment=fragment))
         return ""
 
     @staticmethod
@@ -417,6 +476,16 @@ class OfficialSiteScraper:
 
     @staticmethod
     def _keyword_from_url(url: str) -> str:
+        parsed = urlparse(url)
+        query_sources = [parsed.query]
+        if "?" in parsed.fragment:
+            query_sources.append(parsed.fragment.split("?", 1)[1])
+        for query_source in query_sources:
+            for key, value in parse_qsl(query_source, keep_blank_values=True):
+                normalized_key = re.sub(r"[^a-z0-9]", "", key.casefold())
+                if normalized_key in SEARCH_QUERY_KEYS and str(value).strip():
+                    return str(value).strip()
+
         decoded = url
         for _ in range(3):
             next_value = unquote(decoded)
@@ -435,7 +504,185 @@ class OfficialSiteScraper:
         return ""
 
     @staticmethod
-    def _submit_search(page: Page, term: str) -> bool:
+    def _score_search_field_metadata(metadata: Dict[str, Any]) -> int:
+        """Rank a text control by its likelihood of being a job search box."""
+        field_type = str(metadata.get("type") or "text").casefold()
+        if field_type in {
+            "password", "email", "tel", "number", "date", "datetime-local",
+            "file", "checkbox", "radio", "hidden", "submit", "button",
+        }:
+            return -1000
+        if metadata.get("disabled") or metadata.get("readonly"):
+            return -1000
+
+        primary = " ".join(str(metadata.get(key) or "") for key in (
+            "placeholder", "name", "id", "class_name", "aria_label", "role", "label",
+        )).casefold()
+        context = str(metadata.get("context") or "").casefold()[:500]
+        positive_job = (
+            "职位", "岗位", "职务", "招聘", "job", "position", "career",
+            "vacancy", "opening",
+        )
+        positive_search = (
+            "搜索", "查询", "检索", "关键词", "关键字", "search", "keyword",
+            "query", "find",
+        )
+        negative = (
+            "邮箱", "邮件", "手机号", "电话", "密码", "验证码", "姓名",
+            "登录", "注册", "email", "phone", "mobile", "password", "login",
+            "城市", "地点", "地区", "location", "city",
+        )
+
+        if any(word in primary for word in negative):
+            return -500
+
+        score = 0
+        if field_type == "search":
+            score += 25
+        if str(metadata.get("role") or "").casefold() == "searchbox":
+            score += 30
+        if any(word in primary for word in positive_job):
+            score += 35
+        if any(word in primary for word in positive_search):
+            score += 30
+        if any(word in context for word in positive_job):
+            score += 8
+        if any(word in context for word in positive_search):
+            score += 6
+        if (
+            any(word in context for word in positive_job)
+            and any(word in context for word in positive_search)
+        ):
+            score += 12
+        if str(metadata.get("name") or "").casefold() in {"q", "query", "keyword"}:
+            score += 18
+        return score
+
+    @staticmethod
+    def _score_search_action_metadata(metadata: Dict[str, Any]) -> int:
+        text = " ".join(str(metadata.get(key) or "") for key in (
+            "text", "aria_label", "title", "class_name", "id", "html",
+        )).casefold()
+        if any(word in text for word in (
+            "重置", "清空", "取消", "登录", "注册", "reset", "clear", "cancel",
+            "login", "sign in",
+        )):
+            return -100
+        score = 10 if str(metadata.get("type") or "").casefold() == "submit" else 0
+        if any(word in text for word in (
+            "搜索", "查询", "检索", "确定", "search", "query", "find", "submit",
+        )):
+            score += 35
+        if any(word in text for word in ("search", "query", "keyword")):
+            score += 15
+        return score
+
+    @staticmethod
+    def _page_surfaces(page: Page) -> List[Any]:
+        try:
+            frames = list(page.frames)
+            return frames or [page]
+        except Exception:
+            return [page]
+
+    @staticmethod
+    def _surface_signature(surface: Any) -> str:
+        try:
+            return str(surface.evaluate(
+                "() => `${location.href}\\n${(document.body && document.body.innerText || '').slice(0, 50000)}`"
+            ))
+        except Exception:
+            return ""
+
+    @classmethod
+    def _ranked_search_fields(cls, surface: Any) -> List[Any]:
+        selector = (
+            "input, textarea, [contenteditable='true'], "
+            "[role='searchbox'], [role='textbox']"
+        )
+        try:
+            fields = surface.locator(selector)
+            metadata = fields.evaluate_all(
+                """
+                elements => elements.map((element, index) => {
+                  const container = element.closest(
+                    'form, [role="search"], [class*="search" i], '
+                    + '[class*="query" i], section, div'
+                  );
+                  return {
+                    index,
+                    type: element.getAttribute('type') || '',
+                    placeholder: element.getAttribute('placeholder') || '',
+                    name: element.getAttribute('name') || '',
+                    id: element.id || '',
+                    class_name: typeof element.className === 'string' ? element.className : '',
+                    aria_label: element.getAttribute('aria-label') || '',
+                    role: element.getAttribute('role') || '',
+                    label: Array.from(element.labels || [])
+                      .map(label => label.innerText || label.textContent || '')
+                      .join(' '),
+                    disabled: Boolean(element.disabled),
+                    readonly: Boolean(element.readOnly),
+                    context: (container && (container.innerText || container.textContent) || '').slice(0, 500)
+                  };
+                })
+                """
+            )
+        except Exception:
+            return []
+
+        ranked = []
+        for item in metadata:
+            score = cls._score_search_field_metadata(item)
+            if score >= 20:
+                ranked.append((score, int(item.get("index", 0))))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return [fields.nth(index) for _, index in ranked[:8]]
+
+    @classmethod
+    def _find_search_action(cls, field: Any) -> Optional[Any]:
+        selectors = (
+            "xpath=ancestor::form[1]//*[self::button or @role='button']",
+            "xpath=ancestor::*[contains(translate(@class, 'SEARCHQUERY', 'searchquery'), 'search') or contains(translate(@class, 'SEARCHQUERY', 'searchquery'), 'query')][1]//*[self::button or @role='button']",
+            "xpath=following-sibling::*[self::button or @role='button'][1]",
+            "xpath=following::*[self::button or @role='button'][1]",
+        )
+        ranked = []
+        for selector_index, selector in enumerate(selectors):
+            try:
+                actions = field.locator(selector)
+                for index in range(min(actions.count(), 8)):
+                    action = actions.nth(index)
+                    if not action.is_visible() or not action.is_enabled():
+                        continue
+                    metadata = action.evaluate(
+                        """
+                        element => ({
+                          text: (element.innerText || element.textContent || '').trim(),
+                          aria_label: element.getAttribute('aria-label') || '',
+                          title: element.getAttribute('title') || '',
+                          class_name: typeof element.className === 'string' ? element.className : '',
+                          id: element.id || '',
+                          type: element.getAttribute('type') || '',
+                          html: (element.innerHTML || '').slice(0, 500)
+                        })
+                        """
+                    )
+                    score = cls._score_search_action_metadata(metadata)
+                    if score == 0 and selector_index >= 2:
+                        # An adjacent icon-only action is a common search UI.
+                        score = 3
+                    if score > 0:
+                        ranked.append((score, action))
+            except Exception:
+                continue
+        if not ranked:
+            return None
+        ranked.sort(key=lambda item: -item[0])
+        return ranked[0][1]
+
+    @classmethod
+    def _submit_search(cls, page: Page, term: str) -> bool:
         if "zhaopin.meituan.com" in urlparse(page.url).netloc.lower():
             try:
                 fields = page.locator(
@@ -478,43 +725,25 @@ class OfficialSiteScraper:
             except Exception:
                 pass
 
-        selectors = (
-            "input[placeholder*='关键词查询职位']",
-            "input[placeholder*='职位名称']",
-            "input[type='search']",
-            "input[placeholder*='搜索职位']",
-            "input[placeholder*='搜索']",
-            "input[placeholder*='职位']",
-            "input[placeholder*='关键字']",
-            "input[placeholder*='关键词']",
-            "input[placeholder*='Search']",
-            "input.search-input",
-            "#search-input",
-        )
-        for selector in selectors:
-            try:
-                candidates = page.locator(selector)
-                for index in range(min(candidates.count(), 8)):
-                    field = candidates.nth(index)
+        # Generic fallback: rank controls by their semantic attributes and the
+        # text around them, including controls rendered inside iframes.
+        for surface in cls._page_surfaces(page):
+            for field in cls._ranked_search_fields(surface):
+                try:
                     if not field.is_visible() or not field.is_enabled():
                         continue
                     field.fill(term)
-                    previous_url = page.url
+                    before = cls._surface_signature(surface)
                     field.press("Enter")
-                    # Alibaba's recruitment UI renders the search action as a
-                    # sibling icon-only div and does not submit on Enter.
-                    page.wait_for_timeout(350)
-                    if page.url == previous_url:
-                        try:
-                            action = field.locator("xpath=following-sibling::*[1]")
-                            if action.count() and action.first.is_visible():
-                                action.first.click()
-                        except Exception:
-                            pass
+                    page.wait_for_timeout(450)
+                    if cls._surface_signature(surface) == before:
+                        action = cls._find_search_action(field)
+                        if action is not None:
+                            action.click(timeout=5_000)
                     logger.info("已在页面搜索框中提交关键词: %s", term)
                     return True
-            except Exception:
-                continue
+                except Exception:
+                    continue
         logger.warning("页面没有可用的职位搜索框，将分析当前结果页")
         return False
 
@@ -688,6 +917,81 @@ class OfficialSiteScraper:
             )
             return None
 
+    def _scrape_baidu_keyword(
+        self,
+        target_url: str,
+        keyword: str,
+    ) -> Optional[List[Dict]]:
+        """Search Baidu social recruitment through its public list endpoint."""
+        api_url = "https://talent.baidu.com/httservice/getPostListNew"
+        page_no = 1
+        page_size = 10  # The endpoint rejects larger page sizes.
+        jobs: List[Dict] = []
+
+        try:
+            while True:
+                response = self.session.post(
+                    api_url,
+                    data={
+                        "recruitType": "SOCIAL",
+                        "workPlace": [],
+                        "pageSize": page_size,
+                        "keyWord": keyword,
+                        "postType": [],
+                        "curPage": page_no,
+                        "projectType": "",
+                    },
+                    headers={
+                        "Origin": "https://talent.baidu.com",
+                        "Referer": target_url,
+                    },
+                    timeout=20,
+                )
+                response.raise_for_status()
+                body = response.json()
+                if not isinstance(body, dict) or body.get("status") != "ok":
+                    raise ValueError(
+                        self._text(body.get("message"))
+                        if isinstance(body, dict)
+                        else "百度招聘接口返回格式无效"
+                    )
+                data = body.get("data") or {}
+                records = data.get("list")
+                if not isinstance(records, list):
+                    raise ValueError("百度招聘接口没有返回职位列表")
+
+                page_jobs = [
+                    job
+                    for record in records
+                    if isinstance(record, dict)
+                    for job in [self._from_baidu(record, target_url)]
+                    if job
+                ]
+                for job in page_jobs:
+                    job["_search_keyword"] = keyword
+                jobs = self._merge_jobs(jobs, page_jobs)
+                if len(jobs) >= MAX_JOBS_PER_SEARCH:
+                    jobs = self._limit_search_results(jobs)
+                    break
+
+                total = self._safe_int(data.get("total"))
+                total_pages = self._safe_int(data.get("pages"))
+                if total_pages:
+                    if page_no >= total_pages:
+                        break
+                elif total:
+                    if page_no * page_size >= total:
+                        break
+                elif len(records) < page_size:
+                    break
+                page_no += 1
+
+            logger.info("百度关键词[%s]返回%s个职位", keyword, len(jobs))
+            return jobs
+        except Exception as error:
+            logger.warning("百度关键词接口抓取失败 [%s]: %s", keyword, error)
+            return None
+
     @staticmethod
     def _response_matches_keyword(response, keyword: str) -> bool:
         """Reject delayed default-list responses after a keyword search starts."""
@@ -703,26 +1007,30 @@ class OfficialSiteScraper:
         haystack = haystack.casefold()
         return str(keyword or "").strip().casefold() in haystack
 
-    @staticmethod
-    def _settle_page(page: Page):
+    @classmethod
+    def _settle_page(cls, page: Page):
+        for surface in cls._page_surfaces(page):
+            try:
+                surface.evaluate(
+                    """
+                    async () => {
+                      for (let i = 0; i < 4; i += 1) {
+                        window.scrollTo(0, document.body.scrollHeight);
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                      }
+                      window.scrollTo(0, 0);
+                    }
+                    """
+                )
+            except Exception:
+                continue
         try:
-            page.evaluate(
-                """
-                async () => {
-                  for (let i = 0; i < 4; i += 1) {
-                    window.scrollTo(0, document.body.scrollHeight);
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                  }
-                  window.scrollTo(0, 0);
-                }
-                """
-            )
             page.wait_for_timeout(500)
         except Exception:
             pass
 
-    @staticmethod
-    def _go_to_next_page(page: Page) -> bool:
+    @classmethod
+    def _go_to_next_page(cls, page: Page) -> bool:
         selectors = (
             "li.page-li.active + li.page-li",
             "button:has-text('下一页')",
@@ -735,28 +1043,29 @@ class OfficialSiteScraper:
             ".next-pagination-item.next-next",
             "button:has-text('Next')",
         )
-        for selector in selectors:
-            try:
-                candidates = page.locator(selector)
-                for index in range(min(candidates.count(), 4)):
-                    button = candidates.nth(index)
-                    if not button.is_visible():
-                        continue
-                    class_name = str(button.get_attribute("class") or "").lower()
-                    parent_class = str(
-                        button.locator("..").get_attribute("class") or ""
-                    ).lower()
-                    if (
-                        button.is_disabled()
-                        or button.get_attribute("aria-disabled") == "true"
-                        or "disabled" in class_name
-                        or "disabled" in parent_class
-                    ):
-                        return False
-                    button.click(timeout=5_000)
-                    return True
-            except Exception:
-                continue
+        for surface in cls._page_surfaces(page):
+            for selector in selectors:
+                try:
+                    candidates = surface.locator(selector)
+                    for index in range(min(candidates.count(), 4)):
+                        button = candidates.nth(index)
+                        if not button.is_visible():
+                            continue
+                        class_name = str(button.get_attribute("class") or "").lower()
+                        parent_class = str(
+                            button.locator("..").get_attribute("class") or ""
+                        ).lower()
+                        if (
+                            button.is_disabled()
+                            or button.get_attribute("aria-disabled") == "true"
+                            or "disabled" in class_name
+                            or "disabled" in parent_class
+                        ):
+                            return False
+                        button.click(timeout=5_000)
+                        return True
+                except Exception:
+                    continue
         return False
 
     def _jobs_from_payload(
@@ -766,6 +1075,8 @@ class OfficialSiteScraper:
         target_url: str,
     ) -> List[Dict]:
         """Map the known official JSON response schemas to common job records."""
+        if isinstance(payload, list):
+            return self._jobs_from_generic_payload(payload, response_url, target_url)
         if not isinstance(payload, dict):
             return []
 
@@ -821,6 +1132,21 @@ class OfficialSiteScraper:
                 for record in bilibili_records
                 if isinstance(record, dict)
                 for job in [self._from_bilibili(record, target_url)]
+                if job
+            ]
+
+        # Baidu social recruitment: /httservice/getPostListNew.
+        baidu_records = self._dig(payload, "data", "list")
+        if (
+            "talent.baidu.com" in urlparse(target_url).netloc.lower()
+            and "/httservice/getpostlistnew" in response_url.lower()
+            and isinstance(baidu_records, list)
+        ):
+            return [
+                job
+                for record in baidu_records
+                if isinstance(record, dict)
+                for job in [self._from_baidu(record, target_url)]
                 if job
             ]
 
@@ -885,7 +1211,157 @@ class OfficialSiteScraper:
                 if job
             ]
 
-        return []
+        return self._jobs_from_generic_payload(payload, response_url, target_url)
+
+    @staticmethod
+    def _normalized_schema_key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", str(value or "").casefold())
+
+    @classmethod
+    def _record_value(cls, record: Dict, aliases: Iterable[str]) -> Any:
+        normalized = {
+            cls._normalized_schema_key(key): value
+            for key, value in record.items()
+        }
+        for alias in aliases:
+            value = normalized.get(cls._normalized_schema_key(alias))
+            if value not in (None, "", [], {}):
+                if isinstance(value, dict):
+                    for nested_key in ("url", "href", "link", "value", "name", "label", "title"):
+                        nested_value = value.get(nested_key)
+                        if nested_value not in (None, ""):
+                            return nested_value
+                return value
+        return None
+
+    @classmethod
+    def _generic_record_lists(cls, payload: Any) -> List[List[Dict]]:
+        """Find plausible record arrays without depending on a vendor schema."""
+        result: List[List[Dict]] = []
+
+        def walk(value: Any, depth: int = 0):
+            if depth > 6:
+                return
+            if isinstance(value, list):
+                dictionaries = [item for item in value[:100] if isinstance(item, dict)]
+                if dictionaries:
+                    result.append(dictionaries)
+                for item in value[:20]:
+                    if isinstance(item, (dict, list)):
+                        walk(item, depth + 1)
+                return
+            if isinstance(value, dict):
+                for child in list(value.values())[:80]:
+                    if isinstance(child, (dict, list)):
+                        walk(child, depth + 1)
+
+        walk(payload)
+        return result
+
+    def _from_generic_record(
+        self,
+        record: Dict,
+        response_url: str,
+        target_url: str,
+    ) -> Optional[Dict]:
+        title_aliases = (
+            "jobTitle", "jobName", "positionTitle", "positionName", "postTitle",
+            "postName", "vacancyTitle", "recruitPostName", "title", "职位名称",
+            "岗位名称",
+        )
+        url_aliases = (
+            "jobUrl", "positionUrl", "postUrl", "detailUrl", "applyUrl",
+            "redirectUrl", "href", "link", "url", "详情地址",
+        )
+        id_aliases = (
+            "jobId", "positionId", "postId", "vacancyId", "recruitPostId",
+            "jobCode", "positionCode", "postCode", "code", "id",
+        )
+        description_aliases = (
+            "description", "jobDescription", "positionDescription", "responsibility",
+            "responsibilities", "requirement", "requirements", "qualification",
+            "qualifications", "jobDuty", "jobDuties", "职责", "任职要求",
+        )
+        city_aliases = (
+            "city", "cityName", "location", "locationName", "workPlace",
+            "workplace", "workLocation", "address", "工作地点", "城市",
+        )
+        date_aliases = (
+            "publishTime", "publishedAt", "publishDate", "releaseTime", "createTime",
+            "createdAt", "updateTime", "updatedAt", "refreshTime", "发布日期",
+        )
+        company_aliases = (
+            "company", "companyName", "brand", "brandName", "tenantName", "公司",
+        )
+        detail_url = self._record_value(record, url_aliases)
+        title = self._record_value(record, title_aliases)
+        if not title or not detail_url:
+            return None
+
+        keys = {self._normalized_schema_key(key) for key in record}
+        has_extra_job_clue = any(
+            self._normalized_schema_key(alias) in keys
+            for alias in (
+                *id_aliases, *description_aliases, *city_aliases, *date_aliases,
+                "department", "category", "jobType", "positionType",
+            )
+        )
+        response_looks_job_related = bool(re.search(
+            r"job|position|post|recruit|career|vacanc",
+            str(response_url or ""),
+            flags=re.IGNORECASE,
+        ))
+        if not has_extra_job_clue and not response_looks_job_related:
+            return None
+
+        detail_url = urljoin(target_url, self._text(detail_url))
+        parsed_detail = urlparse(detail_url)
+        if parsed_detail.scheme not in ("http", "https") or not parsed_detail.netloc:
+            return None
+
+        descriptions = []
+        for alias in description_aliases:
+            value = self._record_value(record, (alias,))
+            text = self._join_names(value, preserve_long_text=True)
+            if text and text not in descriptions:
+                descriptions.append(text)
+        for alias in ("department", "departmentName", "category", "categoryName", "jobType"):
+            value = self._record_value(record, (alias,))
+            text = self._join_names(value)
+            if text and text not in descriptions:
+                descriptions.append(text)
+
+        return self._job(
+            title=title,
+            company=(
+                self._record_value(record, company_aliases)
+                or self._company_for_url(target_url)
+            ),
+            city=self._record_value(record, city_aliases),
+            url=detail_url,
+            description="\n".join(descriptions),
+            publish_time=self._record_value(record, date_aliases),
+            target_url=target_url,
+        )
+
+    def _jobs_from_generic_payload(
+        self,
+        payload: Any,
+        response_url: str,
+        target_url: str,
+    ) -> List[Dict]:
+        jobs: List[Dict] = []
+        for records in self._generic_record_lists(payload):
+            parsed = [
+                job
+                for record in records
+                for job in [self._from_generic_record(record, response_url, target_url)]
+                if job
+            ]
+            jobs = self._merge_jobs(jobs, parsed)
+            if len(jobs) >= MAX_JOBS_PER_SEARCH:
+                break
+        return self._limit_search_results(jobs)
 
     def _from_tencent(self, record: Dict, target_url: str) -> Optional[Dict]:
         title = self._text(record.get("RecruitPostName"))
@@ -1034,6 +1510,31 @@ class OfficialSiteScraper:
             target_url=target_url,
         )
 
+    def _from_baidu(self, record: Dict, target_url: str) -> Optional[Dict]:
+        title = self._text(record.get("name"))
+        post_id = self._text(record.get("postId"))
+        if not title or not post_id:
+            return None
+        detail_url = (
+            "https://talent.baidu.com/jobs/detail/SOCIAL/"
+            f"{post_id}"
+        )
+        return self._job(
+            title=title,
+            company="百度",
+            city=record.get("workPlace"),
+            url=detail_url,
+            description=self._sections(
+                ("岗位职责", record.get("workContent")),
+                ("任职要求", record.get("serviceCondition")),
+                ("职位类别", record.get("postType")),
+                ("所属部门", record.get("orgName") or record.get("bgShortName")),
+                ("招聘人数", record.get("recruitNum")),
+            ),
+            publish_time=record.get("publishDate"),
+            target_url=target_url,
+        )
+
     def _from_feishu(self, record: Dict, target_url: str) -> Optional[Dict]:
         title = self._text(record.get("title"))
         position_id = self._text(record.get("id"))
@@ -1152,8 +1653,119 @@ class OfficialSiteScraper:
         target_url: str,
         keyword: str,
     ) -> List[Dict]:
+        jobs: List[Dict] = []
+        for surface in self._page_surfaces(page):
+            jobs = self._merge_jobs(
+                jobs,
+                self._jobs_from_structured_data(surface, target_url, keyword),
+            )
+            jobs = self._merge_jobs(
+                jobs,
+                self._jobs_from_rendered_surface(surface, target_url, keyword),
+            )
+        return jobs
+
+    def _jobs_from_structured_data(
+        self,
+        surface: Any,
+        target_url: str,
+        keyword: str,
+    ) -> List[Dict]:
+        """Read standards-based JobPosting JSON-LD from unfamiliar sites."""
         try:
-            cards = page.locator("a[href]")
+            raw_scripts = surface.locator(
+                "script[type='application/ld+json']"
+            ).evaluate_all(
+                "elements => elements.map(element => element.textContent || '')"
+            )
+        except Exception:
+            return []
+
+        records: List[Dict] = []
+
+        def walk(value: Any, depth: int = 0):
+            if depth > 8:
+                return
+            if isinstance(value, list):
+                for child in value[:100]:
+                    walk(child, depth + 1)
+                return
+            if not isinstance(value, dict):
+                return
+            record_type = value.get("@type")
+            types = record_type if isinstance(record_type, list) else [record_type]
+            if any(str(item or "").casefold() == "jobposting" for item in types):
+                records.append(value)
+            for key, child in value.items():
+                if key != "@context" and isinstance(child, (dict, list)):
+                    walk(child, depth + 1)
+
+        for raw_script in raw_scripts:
+            try:
+                walk(json.loads(raw_script))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+
+        jobs: List[Dict] = []
+        for record in records:
+            title = self._text(record.get("title") or record.get("name"))
+            description = self._text(
+                record.get("description"),
+                preserve_lines=True,
+            )
+            if keyword and keyword.casefold() not in f"{title}\n{description}".casefold():
+                continue
+            detail_url = self._text(record.get("url") or record.get("@id"))
+            if not title or not detail_url:
+                continue
+
+            organization = record.get("hiringOrganization")
+            company = (
+                organization.get("name")
+                if isinstance(organization, dict)
+                else organization
+            )
+            location = record.get("jobLocation")
+            if isinstance(location, list):
+                location_values = location
+            else:
+                location_values = [location]
+            cities = []
+            for item in location_values:
+                if not isinstance(item, dict):
+                    continue
+                address = item.get("address")
+                if isinstance(address, dict):
+                    city = (
+                        address.get("addressLocality")
+                        or address.get("addressRegion")
+                        or address.get("streetAddress")
+                    )
+                else:
+                    city = address or item.get("name")
+                city = self._text(city)
+                if city and city not in cities:
+                    cities.append(city)
+
+            jobs.append(self._job(
+                title=title,
+                company=company or self._company_for_url(target_url),
+                city=cities,
+                url=detail_url,
+                description=description,
+                publish_time=record.get("datePosted"),
+                target_url=target_url,
+            ))
+        return self._merge_jobs([], jobs)
+
+    def _jobs_from_rendered_surface(
+        self,
+        surface: Any,
+        target_url: str,
+        keyword: str,
+    ) -> List[Dict]:
+        try:
+            cards = surface.locator("a[href], [data-href], [data-url]")
             raw_cards = cards.evaluate_all(
                 """
                 elements => elements.map(anchor => {
@@ -1161,13 +1773,27 @@ class OfficialSiteScraper:
                     const node = anchor.querySelector(selector);
                     return node ? (node.innerText || node.textContent || '').trim() : '';
                   };
+                  const rawHref = anchor.href || anchor.getAttribute('href')
+                    || anchor.getAttribute('data-href') || anchor.getAttribute('data-url') || '';
+                  let href = rawHref;
+                  try { href = new URL(rawHref, document.baseURI).href; } catch (_) {}
                   return {
-                    href: anchor.href || anchor.getAttribute('href') || '',
+                    href,
                     text: (anchor.innerText || anchor.textContent || '').trim(),
-                    title: pick('[class*="title-"], [class*="job-title"], [class*="position-name"]'),
-                    date: pick('[class*="published-at-"], time'),
-                    info: pick('[class*="info-"]'),
-                    detail: pick('[class*="short-description-"], [class*="description-"]'),
+                    title: pick(
+                      '[class*="title-"], [class*="job-title" i], [class*="job_name" i], '
+                      + '[class*="job-name" i], [class*="position-name" i], '
+                      + '[class*="position-title" i], [data-testid*="title" i], h2, h3'
+                    ),
+                    date: pick('[class*="published-at-"], [class*="date" i], time'),
+                    info: pick(
+                      '[class*="info-"], [class*="location" i], [class*="city" i], '
+                      + '[class*="meta" i]'
+                    ),
+                    detail: pick(
+                      '[class*="short-description-"], [class*="description-"], '
+                      + '[class*="summary" i], [class*="requirement" i]'
+                    ),
                     excluded: Boolean(anchor.closest(
                       '#latest_jobs, #recommended_jobs, '
                       + '[id*="recommend"], [class*="recommend-job"], '
@@ -1222,11 +1848,18 @@ class OfficialSiteScraper:
         lowered = url.lower()
         patterns = (
             r"/job/[^/?#]+",
+            r"/jobs/[^/?#]+",
             r"/jobs/detail",
             r"/position/[^/?#]+",
+            r"/positions/[^/?#]+",
             r"jobdesc",
+            r"job-detail",
+            r"jobdetail",
             r"position/detail",
             r"position-detail",
+            r"positiondetail",
+            r"(?:[?&#]|%3f)(?:job|position|post)(?:id|code)=",
+            r"#/(?:jobs?|positions?|posts?)/[^/?#]+",
         )
         return any(re.search(pattern, lowered) for pattern in patterns)
 
@@ -1532,6 +2165,14 @@ class OfficialSiteScraper:
             return "哔哩哔哩"
         if "bytedance" in host:
             return "字节跳动"
+        if "baidu" in host:
+            return "百度"
+        if host == "vrfi1sk8a0.jobs.feishu.cn":
+            return "MiniMax"
+        if "/high-flyer/" in lowered:
+            return "DeepSeek"
+        if "/step/" in lowered:
+            return "阶跃星辰"
         if "moonshot" in lowered:
             return "月之暗面"
         if "/zphz/" in lowered:

@@ -1,9 +1,14 @@
 """多网址监测循环和简洁工作日志的离线测试。"""
 
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import app as web_app
+from database import JobDatabase
+from matcher import JobMatcher
+from ai_filter import AIAnalysisError
 
 
 class FakeMatcher:
@@ -37,6 +42,73 @@ class FakeDatabase:
 
 
 class MultiSiteMonitorTests(unittest.TestCase):
+    def test_ai_failure_does_not_save_or_email_scraped_jobs(self):
+        site = 'https://example.com/jobs'
+
+        class OneJobScraper:
+            def scrape_jobs(self, url, keywords, cities):
+                return [{'title': '职位', 'company': '示例',
+                         'url': 'https://example.com/job/1'}]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = JobDatabase(str(Path(temp_dir) / 'jobs.db'))
+            config = {
+                'job_sites': [site], 'job_site_labels': {site: '示例'},
+                'job_keywords': [], 'cities': [], 'ai_provider': 'openai',
+                'openai_api_key': 'bad-key', 'ai_filter_prompt': '筛选',
+                'ai_filter_enabled': True,
+            }
+            monitor = web_app.WebJobMonitor.__new__(web_app.WebJobMonitor)
+            monitor.config = config
+            monitor.matcher = JobMatcher(config, storage_file=str(Path(temp_dir) / 'cache.json'),
+                                         database=database)
+            monitor.notifier = FakeNotifier()
+            monitor.status_callback = lambda *args: None
+            monitor.job_callback = lambda job: None
+            with patch.object(web_app, 'get_scraper_with_callback',
+                              lambda *args: OneJobScraper()), patch.object(
+                web_app, 'db', FakeDatabase()
+            ), patch('matcher.filter_jobs_with_ai', side_effect=AIAnalysisError('failed')):
+                self.assertFalse(monitor.check_jobs())
+            self.assertEqual(database.get_all_jobs(), [])
+            self.assertEqual(monitor.notifier.calls, [])
+
+    def test_ai_receives_one_batch_after_all_sites_and_only_approved_job_is_emailed(self):
+        sites = ['https://example.com/a', 'https://example.com/b']
+        jobs = [
+            {'title': '战略职位', 'company': '甲', 'url': 'https://example.com/job/a'},
+            {'title': '法务职位', 'company': '乙', 'url': 'https://example.com/job/b'},
+        ]
+
+        class OneJobScraper:
+            def scrape_jobs(self, url, keywords, cities):
+                return [jobs[sites.index(url)]]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = JobDatabase(str(Path(temp_dir) / 'jobs.db'))
+            config = {
+                'job_sites': sites, 'job_site_labels': {sites[0]: '甲', sites[1]: '乙'},
+                'job_keywords': [], 'cities': [], 'ai_provider': 'openai',
+                'openai_api_key': 'test-key', 'ai_filter_prompt': '只保留战略',
+                'ai_filter_enabled': True,
+            }
+            monitor = web_app.WebJobMonitor.__new__(web_app.WebJobMonitor)
+            monitor.config = config
+            monitor.matcher = JobMatcher(config, storage_file=str(Path(temp_dir) / 'cache.json'),
+                                         database=database)
+            monitor.notifier = FakeNotifier()
+            monitor.status_callback = lambda *args: None
+            monitor.job_callback = lambda job: None
+            with patch.object(web_app, 'get_scraper_with_callback',
+                              lambda *args: OneJobScraper()), patch.object(
+                web_app, 'db', FakeDatabase()
+            ), patch('matcher.filter_jobs_with_ai', return_value=[jobs[0]]) as ai_filter:
+                self.assertTrue(monitor.check_jobs())
+            ai_filter.assert_called_once()
+            self.assertEqual(ai_filter.call_args.args[0], jobs)
+            self.assertEqual([job['title'] for job in database.get_all_jobs()], ['战略职位'])
+            self.assertEqual([job['title'] for job in monitor.notifier.calls[0][2]], ['战略职位'])
+
     def test_all_sites_run_and_one_failure_does_not_stop_the_loop(self):
         sites = [
             'https://jobs.example.com/search?keywords=one',
@@ -111,6 +183,11 @@ class MultiSiteMonitorTests(unittest.TestCase):
         self.assertEqual(monitor.last_check_result['scraped_jobs'], 2)
         self.assertEqual(monitor.last_check_result['matched_jobs'], 2)
         self.assertTrue(monitor.last_check_result['notification_sent'])
+        self.assertEqual(monitor.last_check_result['site_results'], [
+            {'url': sites[0], 'label': labels[sites[0]], 'status': 'completed', 'scraped_jobs': 1},
+            {'url': sites[1], 'label': labels[sites[1]], 'status': 'failed', 'scraped_jobs': 0},
+            {'url': sites[2], 'label': labels[sites[2]], 'status': 'completed', 'scraped_jobs': 1},
+        ])
 
         work_log_messages = [
             message
@@ -121,10 +198,10 @@ class MultiSiteMonitorTests(unittest.TestCase):
             work_log_messages,
             [
                 '正在抓取【标签一】',
-                '抓取完毕【标签一】找到1个新职位',
                 '正在抓取【标签二】',
-                '抓取完毕【标签二】找到0个新职位',
                 '正在抓取【标签三】',
+                '抓取完毕【标签一】找到1个新职位',
+                '抓取完毕【标签二】找到0个新职位',
                 '抓取完毕【标签三】找到1个新职位',
             ],
         )
@@ -249,7 +326,7 @@ class MultiSiteMonitorTests(unittest.TestCase):
         self.assertEqual(found_jobs[0]['site_label'], '固定产品')
         self.assertTrue(found_jobs[0]['_fixed_url_mode'])
 
-    def test_email_contains_database_top_50_and_marks_current_jobs(self):
+    def test_email_contains_only_newly_approved_jobs(self):
         current_job = {
             'title': '本轮新职位',
             'url': 'https://jobs.example.com/current',
@@ -288,17 +365,11 @@ class MultiSiteMonitorTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(notified_count, 1)
         self.assertEqual(failed_labels, [])
-        self.assertEqual(monitor.matcher.database.request, (50, 0))
         _, email_jobs, notification_jobs = monitor.notifier.calls[0]
-        self.assertEqual(len(email_jobs), 50)
+        self.assertEqual(len(email_jobs), 1)
         self.assertEqual(notification_jobs, [current_job])
         self.assertTrue(email_jobs[0]['_is_new_this_run'])
-        self.assertTrue(
-            all(
-                not job['_is_new_this_run']
-                for job in email_jobs[1:]
-            )
-        )
+        self.assertEqual(email_jobs[0]['title'], '本轮新职位')
 
 
 if __name__ == '__main__':

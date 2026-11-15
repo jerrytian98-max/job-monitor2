@@ -6,76 +6,20 @@ on:
     - cron: '0 13 * * 2,5'
   workflow_dispatch:
 
-# This workflow owns only User 2's config, cache and artifact.
 concurrency:
   group: job-monitor-user2-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  scrape-user2-jobs:
-    runs-on: ubuntu-latest
+  monitor:
     permissions:
       contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
-
-      - name: Restore User 2 job state
-        id: restore-user2-job-state
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            jobs_user2.db
-            jobs_cache_user2.json
-          key: job-monitor-state-user2-${{ github.run_id }}
-          restore-keys: |
-            job-monitor-state-user2-
-
-      - name: Restore User 2 private configuration
-        env:
-          JOB_MONITOR_USER2_CONFIG_B64: ${{ secrets.JOB_MONITOR_USER2_CONFIG_B64 }}
-        run: >-
-          python github_config.py restore --config config_user2.yaml
-          --secret-env JOB_MONITOR_USER2_CONFIG_B64
-
-      - name: Run User 2 check
-        env:
-          JOB_PROFILE: user2
-          # Optional fallbacks when the uploaded config deliberately omits them.
-          JOB_EMAIL_AUTH_CODE: ${{ secrets.JOB_MONITOR_USER2_EMAIL_AUTH_CODE }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_USER2 }}
-        run: python main.py --config config_user2.yaml --once
-
-      - name: Save User 2 job state
-        if: success()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            jobs_user2.db
-            jobs_cache_user2.json
-          key: job-monitor-state-user2-${{ github.run_id }}
-
-      - name: Publish User 2 downloadable job state
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: job-monitor-state-user2
-          path: |
-            jobs_user2.db
-            jobs_cache_user2.json
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 6
+    uses: ./.github/workflows/monitor_profile.yml
+    with:
+      profile: 'user2'
+    secrets:
+      config_b64: ${{ secrets.JOB_MONITOR_USER2_CONFIG_B64 }}
+      email_auth_code: ${{ secrets.JOB_MONITOR_USER2_EMAIL_AUTH_CODE }}
+      gemini_api_key: ${{ secrets.GEMINI_API_KEY_USER2 }}
+      openai_api_key: ${{ secrets.OPENAI_API_KEY_USER2 }}
+      deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY_USER2 }}

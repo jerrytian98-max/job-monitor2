@@ -4,27 +4,31 @@
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
 import os
+import threading
+from contextlib import closing
 
 from job_identity import canonicalize_job_url, job_identity_hash
+from job_tags import captured_tags, legacy_tag_context, recover_job_tags
 from profile_config import normalize_profile, profile_suffix
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.environ.get('JOB_MONITOR_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
 PROFILE = normalize_profile(os.environ.get('JOB_PROFILE', ''))
 PROFILE_SUFFIX = profile_suffix(PROFILE)
 DB_FILE = os.path.join(BASE_DIR, f'jobs{PROFILE_SUFFIX}.db')
 
 
 logger = logging.getLogger(__name__)
+IDENTITY_MIGRATION_VERSION = 1
 
 
 class JobDatabase:
     """职位数据库管理器"""
     
-    def __init__(self, db_path: str = DB_FILE):
+    def __init__(self, db_path: str = DB_FILE, *, migrate_legacy: bool = True):
         """
         初始化数据库
         
@@ -32,6 +36,7 @@ class JobDatabase:
             db_path: 数据库文件路径
         """
         self.db_path = db_path
+        self.migrate_legacy = migrate_legacy
         self._init_db()
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -45,6 +50,7 @@ class JobDatabase:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
+            cursor.execute('BEGIN IMMEDIATE')
             
             # 创建职位表
             cursor.execute('''
@@ -59,7 +65,7 @@ class JobDatabase:
                     source_site TEXT,
                     site_label TEXT,
                     publish_time TEXT,
-                    found_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                    found_time TEXT DEFAULT (datetime('now', 'localtime')),
                     is_notified BOOLEAN DEFAULT 0,
                     job_hash TEXT UNIQUE
                 )
@@ -70,6 +76,10 @@ class JobDatabase:
             columns = {row['name'] for row in cursor.fetchall()}
             if 'site_label' not in columns:
                 cursor.execute('ALTER TABLE jobs ADD COLUMN site_label TEXT')
+            if 'matched_keyword' not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN matched_keyword TEXT NOT NULL DEFAULT ''")
+            if 'capture_mode' not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN capture_mode TEXT NOT NULL DEFAULT 'unknown'")
             
             # 创建索引
             cursor.execute('''
@@ -86,18 +96,21 @@ class JobDatabase:
             ''')
             
             conn.commit()
-            removed_duplicates, backup_path = self._migrate_job_identities(conn)
-            if removed_duplicates:
-                logger.info(
-                    "已合并 %s 条因追踪参数产生的重复职位，备份文件: %s",
-                    removed_duplicates,
-                    backup_path,
-                )
+            if self.migrate_legacy:
+                conn.execute('BEGIN IMMEDIATE')
+                version = conn.execute('PRAGMA user_version').fetchone()[0]
+                if version < IDENTITY_MIGRATION_VERSION:
+                    removed_duplicates, backup_path = self._migrate_job_identities(conn)
+                    conn.execute(f'PRAGMA user_version={IDENTITY_MIGRATION_VERSION}')
+                    if removed_duplicates:
+                        logger.info('已合并 %s 条重复职位，备份文件: %s', removed_duplicates, backup_path)
+                conn.commit()
             logger.info("数据库初始化成功")
             
         except Exception as e:
             logger.error(f"初始化数据库失败: {e}")
             conn.rollback()
+            raise
         finally:
             conn.close()
     
@@ -155,7 +168,6 @@ class JobDatabase:
                 ),
             )
 
-        conn.commit()
         return removed_duplicates, backup_path
 
     @staticmethod
@@ -175,12 +187,16 @@ class JobDatabase:
     def _backup_before_deduplication(self, conn: sqlite3.Connection) -> str:
         backup_path = (
             f"{self.db_path}.dedup-backup-"
-            f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
         )
         backup_conn = None
         try:
             backup_conn = sqlite3.connect(backup_path)
-            conn.backup(backup_conn)
+            # The migration holds a write reservation. A separate read-only
+            # source can back up committed data without backing up an active
+            # write transaction on the same connection (which can block).
+            with closing(sqlite3.connect(self.db_path)) as source:
+                source.backup(backup_conn)
             return backup_path
         except Exception as exc:
             logger.error("清理重复职位前备份数据库失败: %s", exc)
@@ -215,11 +231,13 @@ class JobDatabase:
                 return False
             
             # 插入新职位
+            matched_keyword, capture_mode = captured_tags(job)
             cursor.execute('''
                 INSERT INTO jobs (
                     title, company, salary, city, description, url,
-                    source_site, site_label, publish_time, found_time, job_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_site, site_label, publish_time, found_time, job_hash,
+                    matched_keyword, capture_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 job.get('title', ''),
                 job.get('company', ''),
@@ -231,7 +249,9 @@ class JobDatabase:
                 job.get('site_label', ''),
                 str(job.get('publish_time') or '').strip() or '未知',
                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                job_hash
+                job_hash,
+                matched_keyword,
+                capture_mode
             ))
             
             conn.commit()
@@ -392,9 +412,9 @@ class JobDatabase:
             
             cursor.execute('''
                 SELECT * FROM jobs 
-                WHERE found_time >= datetime('now', '-' || ? || ' hours')
+                WHERE datetime(found_time) >= datetime(?)
                 ORDER BY found_time DESC
-            ''', (hours,))
+            ''', ((datetime.now() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S'),))
             
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
@@ -499,8 +519,8 @@ class JobDatabase:
             cursor.execute('''
                 SELECT COUNT(*) as today 
                 FROM jobs 
-                WHERE DATE(found_time) = DATE('now', 'localtime')
-            ''')
+                WHERE DATE(found_time) = ?
+            ''', (datetime.now().strftime('%Y-%m-%d'),))
             today = cursor.fetchone()['today']
             
             # 未通知
@@ -546,8 +566,8 @@ class JobDatabase:
             
             cursor.execute('''
                 DELETE FROM jobs 
-                WHERE found_time < datetime('now', '-' || ? || ' days')
-            ''', (days,))
+                WHERE datetime(found_time) < datetime(?)
+            ''', ((datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S'),))
             
             deleted_count = cursor.rowcount
             conn.commit()
@@ -596,6 +616,10 @@ class JobDatabase:
         site_label_keyword: str = '',
         limit: Optional[int] = None,
         offset: int = 0,
+        excluded_companies=None,
+        excluded_keywords=None,
+        excluded_sites=None,
+        site_tag_resolver=None,
     ) -> List[Dict]:
         """
         搜索职位
@@ -623,6 +647,12 @@ class JobDatabase:
                 params.append(f'%{site_label_keyword}%')
 
             query = 'SELECT * FROM jobs'
+            tag_conditions, tag_params = self._tag_filter_conditions(excluded_companies, excluded_keywords)
+            conditions.extend(tag_conditions)
+            params.extend(tag_params)
+            site_conditions, site_params = self._site_tag_filter_conditions(conn, excluded_sites, site_tag_resolver)
+            conditions.extend(site_conditions)
+            params.extend(site_params)
             if conditions:
                 query += ' WHERE ' + ' AND '.join(conditions)
             query += '''
@@ -648,7 +678,7 @@ class JobDatabase:
         finally:
             conn.close()
 
-    def count_jobs(self, keyword: str = '', site_label_keyword: str = '') -> int:
+    def count_jobs(self, keyword: str = '', site_label_keyword: str = '', *, excluded_companies=None, excluded_keywords=None, excluded_sites=None, site_tag_resolver=None) -> int:
         """统计全部职位或搜索结果数量。"""
         conn = self._get_connection()
         try:
@@ -668,12 +698,59 @@ class JobDatabase:
                 params.append(f'%{site_label_keyword}%')
 
             query = 'SELECT COUNT(*) AS total FROM jobs'
+            tag_conditions, tag_params = self._tag_filter_conditions(excluded_companies, excluded_keywords)
+            conditions.extend(tag_conditions)
+            params.extend(tag_params)
+            site_conditions, site_params = self._site_tag_filter_conditions(conn, excluded_sites, site_tag_resolver)
+            conditions.extend(site_conditions)
+            params.extend(site_params)
             if conditions:
                 query += ' WHERE ' + ' AND '.join(conditions)
             cursor.execute(query, params)
             return int(cursor.fetchone()['total'])
         finally:
             conn.close()
+
+    @staticmethod
+    def _site_tag_filter_conditions(conn, excluded_sites, site_tag_resolver):
+        if not excluded_sites or site_tag_resolver is None:
+            return [], []
+        fields = ('source_site', 'url', 'site_label', 'matched_keyword', 'capture_mode')
+        conn.create_function('configured_site_tag', 5,
+                             lambda *values: site_tag_resolver(dict(zip(fields, values))),
+                             deterministic=True)
+        placeholders = ','.join('?' for _ in excluded_sites)
+        return [f"configured_site_tag({','.join(fields)}) NOT IN ({placeholders})"], list(excluded_sites)
+
+    @staticmethod
+    def _tag_filter_conditions(excluded_companies, excluded_keywords):
+        conditions = []
+        params = []
+        if excluded_companies:
+            placeholders = ','.join('?' for value in excluded_companies)
+            conditions.append(f"COALESCE(NULLIF(TRIM(company), ''), '未知公司') NOT IN ({placeholders})")
+            params.extend(excluded_companies)
+        if excluded_keywords:
+            placeholders = ','.join('?' for value in excluded_keywords)
+            conditions.append(f"(capture_mode = 'fixed' OR COALESCE(matched_keyword, '') NOT IN ({placeholders}))")
+            params.extend(excluded_keywords)
+        return conditions, params
+
+    def backfill_job_tags(self, config):
+        keywords, cache = legacy_tag_context(config, self.db_path)
+        with closing(self._get_connection()) as conn, conn:
+            rows = conn.execute("SELECT * FROM jobs WHERE capture_mode = 'unknown'").fetchall()
+            for row in rows:
+                keyword, mode = recover_job_tags(dict(row), keywords, cache)
+                if mode != 'unknown':
+                    conn.execute("UPDATE jobs SET matched_keyword=?,capture_mode=? WHERE id=? AND capture_mode='unknown'",
+                                 (keyword, mode, row['id']))
+
+    def get_job_tag_options(self):
+        with closing(self._get_connection()) as conn:
+            companies = [row[0] for row in conn.execute("SELECT DISTINCT COALESCE(NULLIF(TRIM(company), ''), '未知公司') FROM jobs ORDER BY 1")]
+            keywords = [row[0] for row in conn.execute("SELECT DISTINCT COALESCE(matched_keyword, '') FROM jobs WHERE capture_mode != 'fixed' ORDER BY 1")]
+        return {'companies': companies, 'keywords': keywords}
 
     def backfill_site_labels(self, source_label_map: Dict[str, str]) -> int:
         """按来源域名为旧职位补齐网址标签，仅处理当前为空的记录。"""
@@ -709,5 +786,33 @@ class JobDatabase:
             conn.close()
 
 
-# 全局数据库实例
-db = JobDatabase()
+_default_database = None
+_default_database_lock = threading.Lock()
+
+
+def get_default_database():
+    """Open the local/profile database only when it is actually needed."""
+    global _default_database
+    with _default_database_lock:
+        if _default_database is None:
+            _default_database = JobDatabase(DB_FILE)
+        return _default_database
+
+
+class _LazyDatabase:
+    """Compatibility facade; importing database never creates or migrates files."""
+
+    @property
+    def db_path(self):
+        return DB_FILE
+
+    def __getattr__(self, name):
+        if not callable(getattr(JobDatabase, name, None)):
+            raise AttributeError(name)
+
+        def invoke(*args, **kwargs):
+            return getattr(get_default_database(), name)(*args, **kwargs)
+        return invoke
+
+
+db = _LazyDatabase()

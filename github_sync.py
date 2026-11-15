@@ -35,7 +35,6 @@ from profile_config import (
 API_ROOT = "https://api.github.com"
 API_VERSION = "2022-11-28"
 # Compatibility defaults for callers that intentionally do not select a user.
-CONFIG_SECRET_NAME = "JOB_MONITOR_CONFIG_B64"
 ARTIFACT_NAME = "job-monitor-state"
 SETTINGS_FILE = BASE_DIR / "github_sync.yaml"
 TOKEN_ENV_NAME = "JOB_MONITOR_GITHUB_TOKEN"

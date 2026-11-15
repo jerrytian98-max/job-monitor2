@@ -142,7 +142,7 @@ class EmailNotifier:
                             background:#667eea;color:#ffffff;text-align:center;">
                     <div style="font-size:22px;font-weight:700;">爬取的职位信息</div>
                     <div style="margin-top:6px;font-size:14px;opacity:0.94;">
-                        本轮发现 {new_count} 个新职位，以下为最近 50 条以内的职位
+                        本轮发现 {new_count} 个新职位（均符合筛选要求）；以下仅展示本轮职位
                     </div>
                 </div>
         """
