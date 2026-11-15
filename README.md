@@ -87,7 +87,7 @@ GitHub 的 `Code → Download ZIP` 下载的是**源码**，不是已经封装�
 
    最后一条命令会下载 Playwright 专用 Chromium；招聘网站抓取依赖它，即使电脑中已安装 Chrome 也不能省略。
 
-4. 双击 `启动Web服务-用户1(默认).bat`（或兼容脚本 `启动Web服务.bat`）。看到访问地址后，在浏览器打开：
+4. 双击 `启动Web服务.bat`。看到访问地址后，在浏览器打开：
 
    ```text
    http://127.0.0.1:5000
@@ -99,7 +99,7 @@ GitHub 的 `Code → Download ZIP` 下载的是**源码**，不是已经封装�
 
 ### 日常启动与两套独立配置
 
-依赖安装完成后，只需双击 `启动Web服务-用户1(默认).bat`，无需重复安装。也可以在项目目录运行：
+依赖安装完成后，只需双击 `启动Web服务.bat`，无需重复安装。也可以在项目目录运行：
 
 ```powershell
 python app.py
@@ -109,8 +109,8 @@ python app.py
 
 | 用户 | 启动脚本 | 网页地址 | 配置与运行数据 |
 | --- | --- | --- | --- |
-| 用户一 | `启动Web服务-用户1(默认).bat` | `http://127.0.0.1:5000` | `config.yaml`、`jobs.db`、`jobs_cache.json`、`app.log` |
-| 用户二 | `启动Web服务-用户2(分身).bat` | `http://127.0.0.1:5001` | `config_user2.yaml`、`jobs_user2.db`、`jobs_cache_user2.json`、`app_user2.log` |
+| 用户一 | `启动Web服务.bat` | `http://127.0.0.1:5000` | `config.yaml`、`jobs.db`、`jobs_cache.json`、`app.log` |
+| 用户二 | PowerShell 中运行 `.\启动Web服务.bat user2` | `http://127.0.0.1:5001` | `config_user2.yaml`、`jobs_user2.db`、`jobs_cache_user2.json`、`app_user2.log` |
 
 请分别在两个网页中填写网站、关键词、城市、排除词、邮箱和 Gemini 设置。用户一的修改不会写入用户二的文件，反之亦然。
 
@@ -232,7 +232,7 @@ Key 保存在当前用户的私有配置文件中，页面只显示掩码；本�
 
 ### 7. 同时使用用户一和用户二
 
-若要让两个人或两套求职条件相互隔离，请分别启动 `启动Web服务-用户1(默认).bat` 和 `启动Web服务-用户2(分身).bat`。两个网页可同时打开，端口分别为 5000 和 5001，并分别使用：
+若要让两个人或两套求职条件相互隔离，请双击 `启动Web服务.bat` 启动用户一，并在项目目录的 PowerShell 中运行 `.\启动Web服务.bat user2` 启动用户二。两个网页可同时打开，端口分别为 5000 和 5001，并分别使用：
 
 - `config.yaml` / `config_user2.yaml`
 - `jobs.db` / `jobs_user2.db`
@@ -319,7 +319,7 @@ ai_filter_enabled: false
 
 然后按下面顺序做一次初始化：
 
-1. 启动用户一和用户二的两个 BAT，分别打开 `http://127.0.0.1:5000` 与 `http://127.0.0.1:5001`。
+1. 双击 BAT 启动用户一，再通过 `.\启动Web服务.bat user2` 启动用户二，分别打开 `http://127.0.0.1:5000` 与 `http://127.0.0.1:5001`。
 2. 分别填写各自的网站、关键词、邮箱和其他参数，等待自动保存完成。
 3. 在两个网页的“GitHub 同步”中填写同一个 `owner/repository` 和 Token，等待连接设置自动保存。Token 只保存在本机、被忽略的 `github_sync.yaml`，网页只显示掩码。
 4. 在用户一网页点击“一键上传配置”，只会上传 `config.yaml` 至 `JOB_MONITOR_USER1_CONFIG_B64`；在用户二网页点击同一按钮，只会上传 `config_user2.yaml` 至 `JOB_MONITOR_USER2_CONFIG_B64`。邮箱授权码和 AI API Key 随各自的 GitHub Secret 上传；Base64 编码本身不提供加密。
@@ -373,10 +373,10 @@ python main.py --test --once
 # 正式检查一次
 python main.py --once
 
-# 持续监测
+# 持续监测（也可运行 .\启动Web服务.bat cli）
 python main.py
 
-# 使用用户二分身（必须同时指定 JOB_PROFILE，推荐直接双击用户二 BAT）
+# 使用用户二分身（必须同时指定 JOB_PROFILE；网页模式可用 BAT 的 user2 参数）
 $env:JOB_PROFILE = 'user2'
 python main.py --config config_user2.yaml --once
 
@@ -390,7 +390,7 @@ python run_all_profiles.py --once
 
 `import database` 不会创建数据库；默认数据库在首次实际调用时打开。旧数据库的职位身份升级由 `PRAGMA user_version` 记录，仅执行一次，合并重复记录前自动生成数据库备份。维护代码可使用 `JobDatabase(path, migrate_legacy=False)` 暂停旧数据自动升级；修改身份算法时需同步提升迁移版本。备份同样含有私有职位信息，应与数据库一起妥善保管。
 
-本地和云端的事件接口按客户端事件编号返回有限批次，浏览器每约 2 秒自动续接并补收事件。多个标签页各自保留读取位置；云端每次响应立即结束，空闲页面不会持续占用 Gunicorn 工作线程。配置校验与抓取流程由各运行入口共用。双用户 GitHub 工作流保留独立计划和 Secrets，执行步骤统一在 `monitor_profile.yml`；Windows Web 启动脚本统一调用 `launch_web.bat`。
+本地和云端的事件接口按客户端事件编号返回有限批次，浏览器每约 2 秒自动续接并补收事件。多个标签页各自保留读取位置；云端每次响应立即结束，空闲页面不会持续占用 Gunicorn 工作线程。配置校验与抓取流程由各运行入口共用。双用户 GitHub 工作流保留独立计划和 Secrets，执行步骤统一在 `monitor_profile.yml`；Windows 使用 `启动Web服务.bat` 启动服务。
 
 ```powershell
 python -m py_compile app.py main.py database.py scraper.py matcher.py notifier.py config_bootstrap.py github_config.py github_sync.py

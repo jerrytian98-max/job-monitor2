@@ -172,19 +172,19 @@ class WindowsLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             # Run the real Python executable, but stop before application startup.
             (Path(directory) / 'sitecustomize.py').write_text(
-                'import json, os\nprint("LAUNCH_FIXTURE="+json.dumps({'
+                'import json, os, sys\nprint("LAUNCH_FIXTURE="+json.dumps({'
                 '"profile":os.environ.get("JOB_PROFILE",""),'
-                '"port":os.environ.get("FLASK_PORT"),"cwd":os.getcwd()}),flush=True)\nos._exit(7)\n',
+                '"port":os.environ.get("FLASK_PORT"),"cwd":os.getcwd(),"argv":sys.argv}),flush=True)\nos._exit(7)\n',
                 encoding='utf-8',
             )
             env = dict(os.environ, PYTHONPATH=directory, PYTHONDONTWRITEBYTECODE='1')
             env['PATH'] = str(Path(sys.executable).parent) + os.pathsep + env['PATH']
-            for filename, profile, port in (
-                ('启动Web服务.bat', '', '5000'),
-                ('启动Web服务-用户1(默认).bat', '', '5000'),
-                ('启动Web服务-用户2(分身).bat', 'user2', '5001'),
+            for argument, profile, port, script in (
+                ('', '', '5000', 'app.py'),
+                ('user2', 'user2', '5001', 'app.py'),
+                ('cli', '', '5000', 'main.py'),
             ):
-                result = subprocess.run(f'cmd.exe /d /c call "{BASE_DIR / filename}"',
+                result = subprocess.run(f'cmd.exe /d /c call "{BASE_DIR / "启动Web服务.bat"}" {argument}',
                                         cwd=directory, env=env, input='\n', capture_output=True,
                                         text=True, encoding='utf-8', errors='replace', timeout=15)
                 self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
@@ -192,6 +192,7 @@ class WindowsLauncherTests(unittest.TestCase):
                 values = json.loads(line.split('=', 1)[1])
                 self.assertEqual((values['profile'], values['port']), (profile, port))
                 self.assertEqual(Path(values['cwd']), BASE_DIR)
+                self.assertEqual(values['argv'][0], script)
 
 
 if __name__ == '__main__':

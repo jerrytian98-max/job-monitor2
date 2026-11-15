@@ -12,13 +12,13 @@ python -m playwright install chromium
 
 【启动默认用户】
 
-双击：启动Web服务-用户1(默认).bat
+双击：启动Web服务.bat
 访问：http://127.0.0.1:5000
 
 
 【启动第二用户】
 
-双击：启动Web服务-用户2(分身).bat
+在项目目录的 PowerShell 中运行：.\启动Web服务.bat user2
 访问：http://127.0.0.1:5001
 
 
